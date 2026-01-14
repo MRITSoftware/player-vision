@@ -159,6 +159,30 @@
     document.getElementById("btnEntrar").addEventListener("click", () => {
       startPlayer();
     });
+    
+    // Forçar fullscreen quando a página carrega se já estiver em modo standalone
+    window.addEventListener('load', () => {
+      // Verificar se é PWA instalado
+      if (window.matchMedia('(display-mode: standalone)').matches || 
+          window.navigator.standalone === true ||
+          document.referrer.includes('android-app://')) {
+        // Tentar fullscreen após carregar
+        setTimeout(() => {
+          if (typeof entrarFullscreen === 'function') {
+            entrarFullscreen();
+          }
+        }, 500);
+      }
+    });
+    
+    // Tentar fullscreen quando a página ganha foco (ao reabrir)
+    window.addEventListener('focus', () => {
+      // Verificar se há código salvo (player ativo)
+      const codigoSalvo = localStorage.getItem('mrit_display_codigo');
+      if (codigoSalvo && typeof entrarFullscreen === 'function') {
+        setTimeout(() => entrarFullscreen(), 300);
+      }
+    });
   </script>
 </body>
 </html>
