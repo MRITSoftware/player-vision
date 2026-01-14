@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Ícones PWA</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        input[type="file"] {
+            margin: 20px 0;
+            padding: 10px;
+            width: 100%;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .preview {
+            margin: 20px 0;
+            text-align: center;
+        }
+        .preview img {
+            max-width: 200px;
+            margin: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+        }
+        .downloads {
+            margin-top: 30px;
+        }
+        .download-link {
+            display: inline-block;
+            margin: 10px;
+            padding: 10px 20px;
+            background: #28a745;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+        }
+        .info {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Gerador de Ícones PWA</h1>
+        <div class="info">
+            <strong>Como usar:</strong><br>
+            1. Faça upload do seu <code>vision_logo.png</code><br>
+            2. Clique em "Gerar Ícones"<br>
+            3. Baixe os ícones gerados<br>
+            4. Faça upload para o servidor
+        </div>
+        
+        <input type="file" id="imageInput" accept="image/*">
+        <button onclick="generateIcons()">Gerar Ícones (192x192 e 512x512)</button>
+        
+        <div class="preview" id="preview"></div>
+        
+        <div class="downloads" id="downloads"></div>
+    </div>
+
+    <script>
+        function generateIcons() {
+            const input = document.getElementById('imageInput');
+            const file = input.files[0];
+            
+            if (!file) {
+                alert('Por favor, selecione uma imagem primeiro!');
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    // Criar canvas para 192x192
+                    const canvas192 = document.createElement('canvas');
+                    canvas192.width = 192;
+                    canvas192.height = 192;
+                    const ctx192 = canvas192.getContext('2d');
+                    
+                    // Criar canvas para 512x512
+                    const canvas512 = document.createElement('canvas');
+                    canvas512.width = 512;
+                    canvas512.height = 512;
+                    const ctx512 = canvas512.getContext('2d');
+                    
+                    // Calcular dimensões para manter proporção e preencher quadrado
+                    const size192 = 192;
+                    const size512 = 512;
+                    
+                    // Desenhar imagem centralizada e redimensionada
+                    function drawImage(ctx, size) {
+                        // Fundo branco (ou transparente)
+                        ctx.fillStyle = 'white';
+                        ctx.fillRect(0, 0, size, size);
+                        
+                        // Calcular escala para preencher o quadrado mantendo proporção
+                        const scale = Math.max(size / img.width, size / img.height);
+                        const scaledWidth = img.width * scale;
+                        const scaledHeight = img.height * scale;
+                        
+                        // Centralizar
+                        const x = (size - scaledWidth) / 2;
+                        const y = (size - scaledHeight) / 2;
+                        
+                        ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
+                    }
+                    
+                    drawImage(ctx192, size192);
+                    drawImage(ctx512, size512);
+                    
+                    // Converter para blob e criar links de download
+                    canvas192.toBlob(function(blob) {
+                        const url192 = URL.createObjectURL(blob);
+                        const link192 = document.createElement('a');
+                        link192.href = url192;
+                        link192.download = 'icon-192.png';
+                        link192.textContent = '📥 Baixar icon-192.png';
+                        link192.className = 'download-link';
+                        
+                        canvas512.toBlob(function(blob) {
+                            const url512 = URL.createObjectURL(blob);
+                            const link512 = document.createElement('a');
+                            link512.href = url512;
+                            link512.download = 'icon-512.png';
+                            link512.textContent = '📥 Baixar icon-512.png';
+                            link512.className = 'download-link';
+                            
+                            // Mostrar preview
+                            const preview = document.getElementById('preview');
+                            preview.innerHTML = `
+                                <h3>Preview:</h3>
+                                <img src="${url192}" alt="192x192">
+                                <img src="${url512}" alt="512x512">
+                            `;
+                            
+                            // Mostrar links de download
+                            const downloads = document.getElementById('downloads');
+                            downloads.innerHTML = `
+                                <h3>✅ Ícones gerados! Baixe e faça upload para o servidor:</h3>
+                                <div style="text-align: center;">
+                                    ${link192.outerHTML}
+                                    ${link512.outerHTML}
+                                </div>
+                                <div class="info" style="margin-top: 20px;">
+                                    <strong>Próximos passos:</strong><br>
+                                    1. Baixe os dois ícones<br>
+                                    2. Faça upload para: https://mega.mrit.com.br/<br>
+                                    3. Atualize o manifest.json no servidor<br>
+                                    4. Teste novamente no PWA Builder
+                                </div>
+                            `;
+                        }, 'image/png');
+                    }, 'image/png');
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+    </script>
+</body>
+</html>
