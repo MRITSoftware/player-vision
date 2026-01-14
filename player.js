@@ -2357,6 +2357,29 @@ async function pararTudoMostrarLogin() {
   }
 }
 
+// ===== Função para entrar em fullscreen =====
+function entrarFullscreen() {
+  const elem = document.documentElement;
+  
+  // Verificar se já está em fullscreen
+  if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement) {
+    return; // Já está em fullscreen
+  }
+  
+  // Tentar entrar em fullscreen
+  if (elem.requestFullscreen) {
+    elem.requestFullscreen().catch(err => {
+      console.log("⚠️ Não foi possível entrar em fullscreen:", err.message);
+    });
+  } else if (elem.webkitRequestFullscreen) {
+    elem.webkitRequestFullscreen();
+  } else if (elem.mozRequestFullScreen) {
+    elem.mozRequestFullScreen();
+  } else if (elem.msRequestFullscreen) {
+    elem.msRequestFullscreen();
+  }
+}
+
 function mostrarLogin() {
   // Sair do fullscreen se estiver em fullscreen
   if (document.fullscreenElement || document.webkitFullscreenElement) {
