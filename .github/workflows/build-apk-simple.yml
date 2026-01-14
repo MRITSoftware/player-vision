@@ -1,0 +1,177 @@
+name: Build APK - Simple
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+    
+    - name: Install dependencies
+      run: |
+        npm install -g @bubblewrap/cli
+        npm install -g @pwabuilder/cli
+    
+    - name: Generate APK using PWA Builder Web API
+      env:
+        PWA_URL: ${{ secrets.PWA_URL || 'https://mega.mrit.com.br' }}
+      run: |
+        echo "🔗 URL do PWA: $PWA_URL"
+        echo "📋 Verificando acessibilidade..."
+        curl -I "$PWA_URL" || echo "⚠️ URL não acessível"
+        curl -I "$PWA_URL/manifest.json" || echo "⚠️ Manifest não encontrado"
+        
+        echo ""
+        echo "📦 Usando PWA Builder para gerar projeto Android..."
+        
+        # Gerar projeto usando PWA Builder
+        pwabuilder android \
+          --url "$PWA_URL" \
+          --package com.mritsoftware.player \
+          --name "MRIT Player" \
+          --short-name "MRIT" \
+          --display standalone \
+          --orientation any \
+          --theme-color "#000000" \
+          --background-color "#000000" \
+          --skipPwaValidation \
+          --output ./android-project || {
+            echo "⚠️ PWA Builder falhou, tentando Bubblewrap..."
+            
+            # Fallback: Bubblewrap
+            mkdir -p ./bubblewrap-project
+            cd ./bubblewrap-project
+            
+            echo "n" | bubblewrap init \
+              --manifest "$PWA_URL/manifest.json" \
+              --package-id com.mritsoftware.player \
+              --app-version-name "1.0.0" \
+              --app-version-code 1 \
+              --app-name "MRIT Player" \
+              --app-short-name "MRIT" \
+              --display-mode standalone \
+              --theme-color "#000000" \
+              --background-color "#000000" \
+              --orientation any \
+              --skipPwaValidation \
+              --yes || exit 1
+            
+            # Encontrar diretório gerado
+            if [ -d "twa-manifest" ]; then
+              cd twa-manifest
+            elif [ -d ".twa-manifest" ]; then
+              cd .twa-manifest
+            else
+              echo "❌ Diretório TWA não encontrado"
+              exit 1
+            fi
+            
+            echo "🔨 Construindo APK com Bubblewrap..."
+            bubblewrap build --skipPwaValidation || {
+              echo "⚠️ Bubblewrap build falhou, tentando gradlew diretamente..."
+              if [ -f "gradlew" ]; then
+                chmod +x gradlew
+                ./gradlew assembleRelease || ./gradlew assembleDebug
+              else
+                echo "❌ gradlew não encontrado"
+                exit 1
+              fi
+            }
+            
+            cd ../../..
+          }
+    
+    - name: Find all APK files
+      run: |
+        echo "🔍 Procurando APKs em todo o workspace..."
+        echo ""
+        echo "📁 Estrutura de diretórios:"
+        find . -type d \( -name "*android*" -o -name "*bubblewrap*" -o -name "*twa*" \) 2>/dev/null | head -20
+        
+        echo ""
+        echo "📦 Todos os arquivos APK encontrados:"
+        find . -name "*.apk" -type f 2>/dev/null | while read apk; do
+          SIZE=$(du -h "$apk" | cut -f1)
+          echo "  ✅ $apk ($SIZE)"
+        done || echo "  ⚠️ Nenhum APK encontrado"
+        
+        echo ""
+        echo "📋 Verificando locais específicos:"
+        
+        # Criar diretório de saída
+        mkdir -p ./apk-output
+        
+        # Contador
+        APK_FOUND=0
+        
+        # Procurar em todos os locais possíveis e copiar
+        echo "📦 Copiando APKs..."
+        
+        # Android project
+        if [ -d "android-project" ]; then
+          echo "  📁 Verificando android-project..."
+          find android-project -name "*.apk" -type f | while read apk; do
+            echo "    → Copiando: $apk"
+            cp "$apk" "./apk-output/" && APK_FOUND=$((APK_FOUND + 1))
+          done
+        fi
+        
+        # Bubblewrap project
+        if [ -d "bubblewrap-project" ]; then
+          echo "  📁 Verificando bubblewrap-project..."
+          find bubblewrap-project -name "*.apk" -type f | while read apk; do
+            echo "    → Copiando: $apk"
+            cp "$apk" "./apk-output/" && APK_FOUND=$((APK_FOUND + 1))
+          done
+        fi
+        
+        # Qualquer outro lugar
+        find . -name "*.apk" -type f ! -path "./apk-output/*" ! -path "./node_modules/*" | while read apk; do
+          echo "    → Copiando: $apk"
+          cp "$apk" "./apk-output/" && APK_FOUND=$((APK_FOUND + 1))
+        done
+        
+        echo ""
+        echo "📊 Resumo final:"
+        if [ -d "./apk-output" ] && [ "$(ls -A ./apk-output 2>/dev/null)" ]; then
+          echo "✅ APKs copiados com sucesso:"
+          ls -lh ./apk-output/
+          echo ""
+          echo "📦 Total de APKs: $(ls -1 ./apk-output/*.apk 2>/dev/null | wc -l)"
+        else
+          echo "❌ Nenhum APK foi encontrado ou copiado"
+          echo ""
+          echo "🔍 Debug: Listando estrutura do workspace..."
+          find . -maxdepth 3 -type d | head -30
+          echo ""
+          echo "📋 Arquivos gerados:"
+          find . -maxdepth 3 -type f \( -name "*.gradle" -o -name "*.xml" -o -name "*.json" -o -name "*.properties" \) | head -20
+        fi
+    
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mrit-player-apk
+        path: apk-output/*.apk
+        if-no-files-found: error
+        retention-days: 30
