@@ -1493,21 +1493,23 @@ async function tocarLoop() {
           const focus = item.focus || "center center";
           applyFit(video, fit, focus);
 
-          fadeOut(img, () => {
-            fadeIn(video);
-            isPlaying = true;
-            videoRetryCount = 0;
-            isLoadingVideo = false;
-            clearTimeout(safetyTimeout);
-            video.play().catch((e) => {
-              console.error("Erro play HLS:", e);
-              video.muted = true;
-              video.play().catch(() => proximoItem());
+            fadeOut(img, () => {
+              fadeIn(video);
+              isPlaying = true;
+              videoRetryCount = 0;
+              isLoadingVideo = false;
+              clearTimeout(safetyTimeout);
+              video.play().catch((e) => {
+                console.error("Erro play HLS:", e);
+                video.muted = true;
+                video.play().catch(() => proximoItem());
+              });
+              
+              // Tentar fullscreen quando vídeo HLS começar a tocar (múltiplas tentativas)
+              setTimeout(() => entrarFullscreen(), 500);
+              setTimeout(() => entrarFullscreen(), 1500);
+              setTimeout(() => entrarFullscreen(), 3000);
             });
-            
-            // Tentar fullscreen quando vídeo HLS começar a tocar
-            setTimeout(() => entrarFullscreen(), 500);
-          });
         } else if (window.Hls && window.Hls.isSupported()) {
           hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
           hls.loadSource(itemUrl);
