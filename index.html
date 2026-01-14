@@ -181,6 +181,18 @@
       const codigoSalvo = localStorage.getItem('mrit_display_codigo');
       if (codigoSalvo && typeof entrarFullscreen === 'function') {
         setTimeout(() => entrarFullscreen(), 300);
+        setTimeout(() => entrarFullscreen(), 1000);
+        setTimeout(() => entrarFullscreen(), 2000);
+      }
+    });
+    
+    // Tentar fullscreen quando a página fica visível (ao voltar do background)
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        const codigoSalvo = localStorage.getItem('mrit_display_codigo');
+        if (codigoSalvo && typeof entrarFullscreen === 'function') {
+          setTimeout(() => entrarFullscreen(), 500);
+        }
       }
     });
   </script>

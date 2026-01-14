@@ -571,13 +571,15 @@ async function verificarCodigoSalvo() {
               setTimeout(() => { logo.style.display = "none"; }, 500);
             }
             
-            // Entrar em fullscreen automaticamente
-            setTimeout(() => entrarFullscreen(), 300);
-            
             // Iniciar automaticamente
             setTimeout(() => {
               startPlayer();
             }, 1000);
+            
+            // Entrar em fullscreen após iniciar (múltiplas tentativas)
+            setTimeout(() => entrarFullscreen(), 1500);
+            setTimeout(() => entrarFullscreen(), 2500);
+            setTimeout(() => entrarFullscreen(), 4000);
             return;
           } else {
             console.log("❌ Display não encontrado, limpar dispositivo");
@@ -1502,6 +1504,9 @@ async function tocarLoop() {
               video.muted = true;
               video.play().catch(() => proximoItem());
             });
+            
+            // Tentar fullscreen quando vídeo HLS começar a tocar
+            setTimeout(() => entrarFullscreen(), 500);
           });
         } else if (window.Hls && window.Hls.isSupported()) {
           hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
