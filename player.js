@@ -90,6 +90,14 @@ function gerarDeviceId() {
 document.addEventListener('DOMContentLoaded', function() {
   ensureElementsVisible();
   
+  // Tentar entrar em fullscreen imediatamente se for PWA instalado
+  if (window.matchMedia('(display-mode: standalone)').matches || 
+      window.navigator.standalone === true ||
+      document.referrer.includes('android-app://')) {
+    // É um PWA instalado, tentar fullscreen imediatamente
+    setTimeout(() => entrarFullscreen(), 100);
+  }
+  
   // Verificar se já existe um código salvo e iniciar automaticamente
   verificarCodigoSalvo();
 });
@@ -2386,17 +2394,44 @@ function entrarFullscreen() {
     return; // Já está em fullscreen
   }
   
-  // Tentar entrar em fullscreen
-  if (elem.requestFullscreen) {
-    elem.requestFullscreen().catch(err => {
-      console.log("⚠️ Não foi possível entrar em fullscreen:", err.message);
-    });
-  } else if (elem.webkitRequestFullscreen) {
-    elem.webkitRequestFullscreen();
-  } else if (elem.mozRequestFullScreen) {
-    elem.mozRequestFullScreen();
-  } else if (elem.msRequestFullscreen) {
-    elem.msRequestFullscreen();
+  // Tentar entrar em fullscreen com várias estratégias
+  const tryFullscreen = () => {
+    if (elem.requestFullscreen) {
+      return elem.requestFullscreen().catch(err => {
+        console.log("⚠️ requestFullscreen falhou:", err.message);
+        return false;
+      });
+    } else if (elem.webkitRequestFullscreen) {
+      elem.webkitRequestFullscreen();
+      return Promise.resolve(true);
+    } else if (elem.mozRequestFullScreen) {
+      elem.mozRequestFullScreen();
+      return Promise.resolve(true);
+    } else if (elem.msRequestFullscreen) {
+      elem.msRequestFullscreen();
+      return Promise.resolve(true);
+    }
+    return Promise.resolve(false);
+  };
+  
+  // Tentar imediatamente
+  tryFullscreen().then(success => {
+    if (!success) {
+      // Se falhar, tentar novamente após um pequeno delay
+      setTimeout(() => tryFullscreen(), 200);
+    }
+  });
+  
+  // Para Android Chrome, também tentar com o body
+  if (/Android/i.test(navigator.userAgent)) {
+    setTimeout(() => {
+      const body = document.body;
+      if (body.requestFullscreen) {
+        body.requestFullscreen().catch(() => {});
+      } else if (body.webkitRequestFullscreen) {
+        body.webkitRequestFullscreen();
+      }
+    }, 100);
   }
 }
 
