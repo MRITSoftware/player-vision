@@ -1021,9 +1021,7 @@ async function iniciar() {
     }
 
     // Entrar em fullscreen apenas após validação bem-sucedida
-    const elem = document.documentElement;
-    if (elem.requestFullscreen) elem.requestFullscreen().catch(() => {});
-    else if (elem.webkitRequestFullscreen) elem.webkitRequestFullscreen();
+    setTimeout(() => entrarFullscreen(), 500);
 
     // Animar saída dos elementos da interface
     const inputDiv = document.getElementById("codigoInput");
