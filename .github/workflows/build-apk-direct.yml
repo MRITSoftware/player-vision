@@ -1,0 +1,176 @@
+name: Build APK - Direct Android Build
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v3
+    
+    - name: Install Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
+    - name: Install Bubblewrap
+      run: npm install -g @bubblewrap/cli
+    
+    - name: Create TWA project
+      env:
+        PWA_URL: ${{ secrets.PWA_URL || 'https://mega.mrit.com.br' }}
+      run: |
+        echo "🔗 URL do PWA: $PWA_URL"
+        echo "📋 Verificando acessibilidade..."
+        curl -s -o /dev/null -w "%{http_code}" "$PWA_URL" | grep -q "200" && echo "✅ URL acessível" || echo "❌ URL não acessível"
+        curl -s -o /dev/null -w "%{http_code}" "$PWA_URL/manifest.json" | grep -q "200" && echo "✅ Manifest acessível" || echo "❌ Manifest não acessível"
+        
+        echo ""
+        echo "📦 Criando projeto TWA com Bubblewrap..."
+        
+        # Criar diretório para o projeto
+        mkdir -p twa-project
+        cd twa-project
+        
+        # Inicializar TWA de forma não-interativa
+        echo "n" | bubblewrap init \
+          --manifest "$PWA_URL/manifest.json" \
+          --package-id com.mritsoftware.player \
+          --app-version-name "1.0.0" \
+          --app-version-code 1 \
+          --app-name "MRIT Player" \
+          --app-short-name "MRIT" \
+          --display-mode standalone \
+          --theme-color "#000000" \
+          --background-color "#000000" \
+          --orientation any \
+          --skipPwaValidation \
+          --yes
+        
+        if [ $? -ne 0 ]; then
+          echo "❌ Falha ao inicializar TWA"
+          exit 1
+        fi
+        
+        echo "✅ Projeto TWA criado"
+    
+    - name: Build APK with Gradle
+      run: |
+        cd twa-project
+        
+        # Encontrar diretório do projeto Android
+        if [ -d "twa-manifest" ]; then
+          cd twa-manifest
+        elif [ -d ".twa-manifest" ]; then
+          cd .twa-manifest
+        else
+          echo "❌ Diretório TWA não encontrado"
+          ls -la
+          exit 1
+        fi
+        
+        echo "📁 Diretório do projeto: $(pwd)"
+        echo "📋 Estrutura do projeto:"
+        ls -la
+        
+        echo ""
+        echo "🔨 Construindo APK com Gradle..."
+        
+        # Dar permissão ao gradlew
+        if [ -f "gradlew" ]; then
+          chmod +x gradlew
+        fi
+        
+        # Build do APK
+        ./gradlew assembleRelease || ./gradlew assembleDebug
+        
+        if [ $? -ne 0 ]; then
+          echo "❌ Falha ao construir APK"
+          echo "📋 Logs do Gradle:"
+          ./gradlew assembleRelease --stacktrace || true
+          exit 1
+        fi
+        
+        echo "✅ APK construído com sucesso"
+    
+    - name: Find and copy APK
+      run: |
+        echo "🔍 Procurando APK gerado..."
+        
+        # Criar diretório de saída
+        mkdir -p apk-output
+        
+        # Procurar APK no projeto TWA
+        if [ -d "twa-project" ]; then
+          cd twa-project
+          
+          # Procurar em todos os locais possíveis
+          TWA_DIR=""
+          if [ -d "twa-manifest" ]; then
+            TWA_DIR="twa-manifest"
+          elif [ -d ".twa-manifest" ]; then
+            TWA_DIR=".twa-manifest"
+          fi
+          
+          if [ -n "$TWA_DIR" ]; then
+            echo "📁 Procurando em $TWA_DIR..."
+            
+            # Locais onde o APK pode estar
+            APK_LOCATIONS=(
+              "$TWA_DIR/app/build/outputs/apk/release/app-release.apk"
+              "$TWA_DIR/app/build/outputs/apk/debug/app-debug.apk"
+              "$TWA_DIR/app/build/outputs/apk/release/*.apk"
+              "$TWA_DIR/app/build/outputs/apk/debug/*.apk"
+            )
+            
+            for location in "${APK_LOCATIONS[@]}"; do
+              if ls $location 1> /dev/null 2>&1; then
+                echo "✅ Encontrado APK em: $location"
+                cp $location ../apk-output/ 2>/dev/null || true
+              fi
+            done
+            
+            # Busca mais ampla
+            find "$TWA_DIR" -name "*.apk" -type f | while read apk; do
+              echo "✅ Encontrado: $apk"
+              cp "$apk" ../apk-output/
+            done
+          fi
+          
+          cd ..
+        fi
+        
+        # Verificar se encontrou APKs
+        if [ -d "apk-output" ] && [ "$(ls -A apk-output 2>/dev/null)" ]; then
+          echo ""
+          echo "✅ APKs encontrados e copiados:"
+          ls -lh apk-output/
+        else
+          echo ""
+          echo "❌ Nenhum APK encontrado"
+          echo "📋 Debug: Estrutura do projeto TWA:"
+          find twa-project -type f -name "*.apk" -o -name "build.gradle" -o -name "gradlew" | head -20
+          exit 1
+        fi
+    
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: mrit-player-apk
+        path: apk-output/*.apk
+        if-no-files-found: error
+        retention-days: 30
