@@ -162,20 +162,28 @@
     
     // Forçar fullscreen quando a página carrega se já estiver em modo standalone
     window.addEventListener('load', () => {
-      // Verificar se há código salvo (player ativo)
+      // Verificar se há código E local salvos (player ativo)
       const codigoSalvo = localStorage.getItem('mrit_display_codigo');
+      const localSalvo = localStorage.getItem('mrit_local_tela');
+      const temCodigoCompleto = codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim();
       
       // Verificar se é PWA instalado ou APK
       const isPWA = window.matchMedia('(display-mode: standalone)').matches || 
                     window.navigator.standalone === true ||
                     document.referrer.includes('android-app://');
       
-      if (codigoSalvo && isPWA && typeof entrarFullscreen === 'function') {
-        // Tentar fullscreen múltiplas vezes ao carregar
-        setTimeout(() => entrarFullscreen(), 500);
+      if (temCodigoCompleto && typeof entrarFullscreen === 'function') {
+        console.log("🔒 Código completo salvo detectado - FORÇANDO fullscreen obrigatório");
+        // Tentar fullscreen múltiplas vezes ao carregar (OBRIGATÓRIO)
+        setTimeout(() => entrarFullscreen(), 300);
+        setTimeout(() => entrarFullscreen(), 800);
         setTimeout(() => entrarFullscreen(), 1500);
         setTimeout(() => entrarFullscreen(), 3000);
         setTimeout(() => entrarFullscreen(), 5000);
+        setTimeout(() => entrarFullscreen(), 7000);
+      } else if (isPWA && typeof entrarFullscreen === 'function') {
+        // Mesmo sem código, tentar se for PWA
+        setTimeout(() => entrarFullscreen(), 500);
       }
     });
     

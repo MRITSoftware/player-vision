@@ -90,6 +90,18 @@ function gerarDeviceId() {
 document.addEventListener('DOMContentLoaded', function() {
   ensureElementsVisible();
   
+  // Verificar localStorage PRIMEIRO (busca rápida)
+  const codigoLocal = localStorage.getItem(CODIGO_DISPLAY_KEY);
+  const localLocal = localStorage.getItem(LOCAL_TELA_KEY);
+  
+  // Se há código salvo, FORÇAR fullscreen imediatamente
+  if (codigoLocal && codigoLocal.trim() && localLocal && localLocal.trim()) {
+    console.log("🔒 Código salvo detectado no carregamento - FORÇANDO fullscreen");
+    setTimeout(() => entrarFullscreen(), 100);
+    setTimeout(() => entrarFullscreen(), 400);
+    setTimeout(() => entrarFullscreen(), 800);
+  }
+  
   // Tentar entrar em fullscreen imediatamente se for PWA instalado
   if (window.matchMedia('(display-mode: standalone)').matches || 
       window.navigator.standalone === true ||
@@ -440,7 +452,26 @@ async function verificarCodigoSalvo() {
   try {
     const deviceId = gerarDeviceId();
     
-    // PRIMEIRO: Buscar na tabela dispositivos (nova tabela)
+    // PRIMEIRO: Verificar localStorage (busca rápida local)
+    const codigoLocal = localStorage.getItem(CODIGO_DISPLAY_KEY);
+    const localLocal = localStorage.getItem(LOCAL_TELA_KEY);
+    
+    if (codigoLocal && codigoLocal.trim()) {
+      console.log("📦 Código encontrado no localStorage:", codigoLocal);
+      
+      // Preencher campos imediatamente (feedback visual rápido)
+      const codigoField = document.getElementById("codigoTela");
+      const localField = document.getElementById("localTela");
+      if (codigoField) codigoField.value = codigoLocal.trim().toUpperCase();
+      if (localField && localLocal) localField.value = localLocal;
+      
+      // Tentar fullscreen imediatamente se há código salvo
+      setTimeout(() => entrarFullscreen(), 200);
+      setTimeout(() => entrarFullscreen(), 800);
+      setTimeout(() => entrarFullscreen(), 1500);
+    }
+    
+    // SEGUNDO: Buscar na tabela dispositivos (banco - fonte de verdade)
     if (navigator.onLine) {
       try {
         const { data: dispositivo, error: dispositivoError } = await client
@@ -550,9 +581,10 @@ async function verificarCodigoSalvo() {
               console.warn("⚠️ Erro ao atualizar:", updateErr);
             }
             
-            // Salvar no localStorage também
+            // Salvar no localStorage (sincronizar com banco)
             localStorage.setItem(CODIGO_DISPLAY_KEY, codigoDisplay);
             if (localNome) localStorage.setItem(LOCAL_TELA_KEY, localNome);
+            console.log("💾 Código e local salvos no localStorage:", codigoDisplay, localNome);
             
             // Esconder elementos de login
             const inputDiv = document.getElementById("codigoInput");
@@ -571,15 +603,23 @@ async function verificarCodigoSalvo() {
               setTimeout(() => { logo.style.display = "none"; }, 500);
             }
             
+            // FORÇAR fullscreen imediatamente (código salvo = obrigatório fullscreen)
+            console.log("🔒 Código e local salvos detectados - FORÇANDO fullscreen obrigatório");
+            entrarFullscreen(); // Imediato
+            setTimeout(() => entrarFullscreen(), 200);
+            setTimeout(() => entrarFullscreen(), 500);
+            setTimeout(() => entrarFullscreen(), 1000);
+            
             // Iniciar automaticamente
             setTimeout(() => {
               startPlayer();
             }, 1000);
             
-            // Entrar em fullscreen após iniciar (múltiplas tentativas)
+            // Continuar tentando fullscreen após iniciar (múltiplas tentativas)
             setTimeout(() => entrarFullscreen(), 1500);
             setTimeout(() => entrarFullscreen(), 2500);
             setTimeout(() => entrarFullscreen(), 4000);
+            setTimeout(() => entrarFullscreen(), 6000);
             return;
           } else {
             console.log("❌ Display não encontrado, limpar dispositivo");
