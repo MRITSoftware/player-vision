@@ -8,13 +8,13 @@
 // - Limpeza por namespace quando a tela sai de uso
 // -------------------------------------------------------
 
-const CACHE_NAME = "mrit-player-cache-v12"; // bump para forçar update
+const CACHE_NAME = "mrit-player-cache-v13"; // bump para forçar update (limites aumentados)
 const DB_NAME = "mrit-player-idb";
 const DB_STORE = "videos"; // guarda blobs por namespace
 
 // ===== HLS settings =====
 const HLS_CACHE = CACHE_NAME;
-const HLS_PREFETCH = 12;           // ~24s
+const HLS_PREFETCH = 24;           // ~48s (aumentado para melhor buffering)
 const HLS_FETCH_TIMEOUT_MS = 3500; // timeout curto
 
 // ===== Debug & Estado =====
@@ -23,8 +23,8 @@ let OFFLINE_TEST = false;
 let CURRENT_NS = "global"; // namespace da tela (ex.: CÓDIGO)
 
 // Limites de cache (simples e efetivos)
-const MAX_VIDEOS_PER_NS = 12;       // até 12 vídeos por tela
-const MAX_VIDEO_BYTES = 1024 * 1024 * 1024; // 1GB por vídeo (ignora maiores)
+const MAX_VIDEOS_PER_NS = 50;       // até 50 vídeos por tela (aumentado para dispositivos com mais memória)
+const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por vídeo (aumentado para suportar vídeos maiores)
 
 function dlog(...args) { if (DEBUG_LOG) console.log("[SW]", ...args); }
 const nsKey = (url) => `${CURRENT_NS}::${url}`;

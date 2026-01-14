@@ -79,7 +79,7 @@
     }
     #codigoInput.fade-out { animation: fadeOut 0.6s ease forwards; }
 
-    #codigoTela, #localTela {
+    #codigoTela {
       padding: 14px; font-size: 1.2rem; width: 100%; max-width: 300px;
       border: none; border-radius: 8px; outline: none; text-align: center;
       background-color: #fff;
@@ -136,11 +136,6 @@
       style="text-transform: uppercase;"
       oninput="this.value = this.value.toUpperCase()"
     />
-    <input
-      type="text"
-      id="localTela"
-      placeholder="Local da tela (ex: Sala 1, Recepção)"
-    />
     <button id="btnEntrar">Iniciar</button>
   </div>
 
@@ -162,18 +157,17 @@
     
     // Forçar fullscreen quando a página carrega se já estiver em modo standalone
     window.addEventListener('load', () => {
-      // Verificar se há código E local salvos (player ativo)
+      // Verificar se há código salvo (player ativo)
       const codigoSalvo = localStorage.getItem('mrit_display_codigo');
-      const localSalvo = localStorage.getItem('mrit_local_tela');
-      const temCodigoCompleto = codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim();
+      const temCodigoSalvo = codigoSalvo && codigoSalvo.trim();
       
       // Verificar se é PWA instalado ou APK
       const isPWA = window.matchMedia('(display-mode: standalone)').matches || 
                     window.navigator.standalone === true ||
                     document.referrer.includes('android-app://');
       
-      if (temCodigoCompleto && typeof entrarFullscreen === 'function') {
-        console.log("🔒 Código completo salvo detectado - FORÇANDO fullscreen obrigatório");
+      if (temCodigoSalvo && typeof entrarFullscreen === 'function') {
+        console.log("🔒 Código salvo detectado - FORÇANDO fullscreen obrigatório");
         // Tentar fullscreen múltiplas vezes ao carregar (OBRIGATÓRIO)
         setTimeout(() => entrarFullscreen(), 300);
         setTimeout(() => entrarFullscreen(), 800);
@@ -187,42 +181,148 @@
       }
     });
     
+    // Função para forçar foco no player
+    function forcarFocoNoPlayer() {
+      try {
+        // Tentar focar no vídeo primeiro
+        const video = document.getElementById("videoPlayer");
+        if (video && video.style.display !== 'none') {
+          video.focus();
+          // Para elementos de mídia, pode precisar de click programático
+          if (video.requestFullscreen || video.webkitRequestFullscreen) {
+            video.click();
+          }
+        }
+        
+        // Tentar focar na imagem se vídeo não estiver visível
+        const img = document.getElementById("imgPlayer");
+        if (img && img.style.display !== 'none') {
+          img.focus();
+        }
+        
+        // Focar no body/document como fallback
+        document.body.focus();
+        window.focus();
+        
+        // Para garantir foco, também tentar com um elemento invisível focável
+        let focusHelper = document.getElementById('focus-helper');
+        if (!focusHelper) {
+          focusHelper = document.createElement('div');
+          focusHelper.id = 'focus-helper';
+          focusHelper.style.cssText = 'position: fixed; top: -9999px; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none;';
+          focusHelper.tabIndex = -1;
+          document.body.appendChild(focusHelper);
+        }
+        focusHelper.focus();
+        
+        console.log("🎯 Foco forçado no player");
+      } catch (err) {
+        console.warn("⚠️ Erro ao forçar foco:", err);
+      }
+    }
+    
+    // Função auxiliar para verificar e forçar fullscreen
+    function verificarEForcarFullscreen(contexto = '') {
+      const codigoSalvo = localStorage.getItem('mrit_display_codigo');
+      const localSalvo = localStorage.getItem('mrit_local_tela');
+      const temCodigoCompleto = codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim();
+      
+      if (temCodigoCompleto && typeof entrarFullscreen === 'function') {
+        // PRIMEIRO: Forçar foco no player
+        forcarFocoNoPlayer();
+        
+        // Verificar se já está em fullscreen
+        const jaEstaFullscreen = document.fullscreenElement || 
+                                  document.webkitFullscreenElement || 
+                                  document.mozFullScreenElement || 
+                                  document.msFullscreenElement;
+        
+        if (!jaEstaFullscreen) {
+          console.log(`🔄 ${contexto} - Forçando fullscreen automático...`);
+          // Múltiplas tentativas com delays progressivos (após garantir foco)
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 100);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 300);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 600);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 1000);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 1500);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 2500);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 4000);
+          setTimeout(() => {
+            forcarFocoNoPlayer();
+            entrarFullscreen();
+          }, 6000);
+        }
+      }
+    }
+    
     // Tentar fullscreen quando a página ganha foco (ao reabrir o app)
     window.addEventListener('focus', () => {
-      // Verificar se há código salvo (player ativo)
-      const codigoSalvo = localStorage.getItem('mrit_display_codigo');
-      if (codigoSalvo && typeof entrarFullscreen === 'function') {
-        console.log("🔄 App ganhou foco, tentando fullscreen...");
-        setTimeout(() => entrarFullscreen(), 300);
-        setTimeout(() => entrarFullscreen(), 1000);
-        setTimeout(() => entrarFullscreen(), 2000);
-        setTimeout(() => entrarFullscreen(), 3500);
-      }
+      verificarEForcarFullscreen('App ganhou foco');
     });
     
     // Tentar fullscreen quando a página fica visível (ao voltar do background)
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) {
-        const codigoSalvo = localStorage.getItem('mrit_display_codigo');
-        if (codigoSalvo && typeof entrarFullscreen === 'function') {
-          console.log("👁️ Página ficou visível, tentando fullscreen...");
-          setTimeout(() => entrarFullscreen(), 500);
-          setTimeout(() => entrarFullscreen(), 1500);
-          setTimeout(() => entrarFullscreen(), 3000);
-        }
+        verificarEForcarFullscreen('Página ficou visível');
       }
     });
     
     // Tentar fullscreen quando a página é mostrada (pageshow - ao voltar do cache)
     window.addEventListener('pageshow', (event) => {
-      // Se veio do cache (back/forward), tentar fullscreen
-      if (event.persisted) {
-        const codigoSalvo = localStorage.getItem('mrit_display_codigo');
-        if (codigoSalvo && typeof entrarFullscreen === 'function') {
-          console.log("📄 Página restaurada do cache, tentando fullscreen...");
-          setTimeout(() => entrarFullscreen(), 500);
-          setTimeout(() => entrarFullscreen(), 1500);
-        }
+      // Tentar sempre, não só se veio do cache
+      verificarEForcarFullscreen('Página mostrada');
+    });
+    
+    // Tentar fullscreen quando a janela é redimensionada (pode indicar volta do fullscreen)
+    window.addEventListener('resize', () => {
+      // Debounce para não executar muitas vezes
+      clearTimeout(window.resizeTimeout);
+      window.resizeTimeout = setTimeout(() => {
+        verificarEForcarFullscreen('Janela redimensionada');
+      }, 500);
+    });
+    
+    // Tentar fullscreen quando o mouse/touch retorna (indica interação do usuário)
+    document.addEventListener('mouseenter', () => {
+      verificarEForcarFullscreen('Mouse entrou na página');
+    }, { once: true });
+    
+    // Para mobile: tentar quando toca na tela
+    document.addEventListener('touchstart', () => {
+      verificarEForcarFullscreen('Touch detectado');
+    }, { once: true, passive: true });
+    
+    // Monitorar mudanças no fullscreen e tentar reativar se sair
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) {
+        setTimeout(() => verificarEForcarFullscreen('Fullscreen foi desativado'), 500);
+      }
+    });
+    
+    document.addEventListener('webkitfullscreenchange', () => {
+      if (!document.webkitFullscreenElement) {
+        setTimeout(() => verificarEForcarFullscreen('Fullscreen WebKit foi desativado'), 500);
       }
     });
   </script>

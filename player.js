@@ -14,6 +14,15 @@ const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
 const POLLING_MS = 1000; // 1 segundo para resposta instantânea
+
+// ===== Configurações de Buffering =====
+// Modos disponíveis:
+// - "progressive": Espera buffer mínimo antes de tocar (recomendado - melhor equilíbrio)
+// - "full": Espera carregar 100% antes de tocar (mais seguro, mas mais lento)
+// - "immediate": Toca assim que possível (mais rápido, pode travar em conexões lentas)
+const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
+const MIN_BUFFER_SECONDS = 5; // Segundos mínimos de buffer para modo "progressive"
+
 let playlist = [];
 let currentIndex = 0;
 let currentPlaylistId = null;
@@ -112,6 +121,75 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Verificar se já existe um código salvo e iniciar automaticamente
   verificarCodigoSalvo();
+  
+  // Monitorar mudanças no fullscreen e tentar reativar automaticamente se sair
+  const verificarFullscreenEreativar = () => {
+    const codigoSalvo = localStorage.getItem(CODIGO_DISPLAY_KEY);
+    const localSalvo = localStorage.getItem(LOCAL_TELA_KEY);
+    const temCodigoCompleto = codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim();
+    
+    if (temCodigoCompleto) {
+      const jaEstaFullscreen = document.fullscreenElement || 
+                                document.webkitFullscreenElement || 
+                                document.mozFullScreenElement || 
+                                document.msFullscreenElement;
+      
+      if (!jaEstaFullscreen) {
+        console.log("🔒 Fullscreen foi desativado - tentando reativar automaticamente...");
+        // Forçar foco antes de cada tentativa
+        forcarFocoNoPlayer();
+        setTimeout(() => {
+          forcarFocoNoPlayer();
+          entrarFullscreen();
+        }, 300);
+        setTimeout(() => {
+          forcarFocoNoPlayer();
+          entrarFullscreen();
+        }, 800);
+        setTimeout(() => {
+          forcarFocoNoPlayer();
+          entrarFullscreen();
+        }, 1500);
+        setTimeout(() => {
+          forcarFocoNoPlayer();
+          entrarFullscreen();
+        }, 2500);
+      }
+    }
+  };
+  
+  // Listener para mudanças no fullscreen (padrão)
+  document.addEventListener('fullscreenchange', verificarFullscreenEreativar);
+  
+  // Listener para mudanças no fullscreen (WebKit - Chrome/Safari)
+  document.addEventListener('webkitfullscreenchange', verificarFullscreenEreativar);
+  
+  // Listener para mudanças no fullscreen (Mozilla)
+  document.addEventListener('mozfullscreenchange', verificarFullscreenEreativar);
+  
+  // Listener para mudanças no fullscreen (IE/Edge)
+  document.addEventListener('MSFullscreenChange', verificarFullscreenEreativar);
+  
+  // Monitorar periodicamente se saiu do fullscreen (fallback adicional)
+  setInterval(() => {
+    const codigoSalvo = localStorage.getItem(CODIGO_DISPLAY_KEY);
+    const localSalvo = localStorage.getItem(LOCAL_TELA_KEY);
+    const temCodigoCompleto = codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim();
+    
+    if (temCodigoCompleto) {
+      const jaEstaFullscreen = document.fullscreenElement || 
+                                document.webkitFullscreenElement || 
+                                document.mozFullScreenElement || 
+                                document.msFullscreenElement;
+      
+      if (!jaEstaFullscreen) {
+        // Tentar reativar a cada 5 segundos se não estiver em fullscreen
+        // Forçar foco antes de tentar
+        forcarFocoNoPlayer();
+        entrarFullscreen();
+      }
+    }
+  }, 5000); // Verificar a cada 5 segundos
 });
 
 // ===== Sistema de Notificações =====
@@ -459,11 +537,9 @@ async function verificarCodigoSalvo() {
     if (codigoLocal && codigoLocal.trim()) {
       console.log("📦 Código encontrado no localStorage:", codigoLocal);
       
-      // Preencher campos imediatamente (feedback visual rápido)
+      // Preencher campo imediatamente (feedback visual rápido)
       const codigoField = document.getElementById("codigoTela");
-      const localField = document.getElementById("localTela");
       if (codigoField) codigoField.value = codigoLocal.trim().toUpperCase();
-      if (localField && localLocal) localField.value = localLocal;
       
       // Tentar fullscreen imediatamente se há código salvo
       setTimeout(() => entrarFullscreen(), 200);
@@ -487,11 +563,9 @@ async function verificarCodigoSalvo() {
           const codigoDisplay = dispositivo.codigo_display;
           const localNome = dispositivo.local_nome;
           
-          // Preencher campos
+          // Preencher campo de código
           const codigoField = document.getElementById("codigoTela");
-          const localField = document.getElementById("localTela");
           if (codigoField) codigoField.value = codigoDisplay.trim().toUpperCase();
-          if (localField) localField.value = localNome || "";
           
           // Verificar se o display ainda existe e se is_locked permite uso
           const { data: display, error: displayError } = await client
@@ -524,11 +598,9 @@ async function verificarCodigoSalvo() {
               localStorage.removeItem(CODIGO_DISPLAY_KEY);
               localStorage.removeItem(LOCAL_TELA_KEY);
               
-              // Limpar campos
+              // Limpar campo de código
               const codigoField = document.getElementById("codigoTela");
-              const localField = document.getElementById("localTela");
               if (codigoField) codigoField.value = "";
-              if (localField) localField.value = "";
               
               return;
             }
@@ -548,11 +620,9 @@ async function verificarCodigoSalvo() {
               localStorage.removeItem(CODIGO_DISPLAY_KEY);
               localStorage.removeItem(LOCAL_TELA_KEY);
               
-              // Limpar campos
+              // Limpar campo de código
               const codigoField = document.getElementById("codigoTela");
-              const localField = document.getElementById("localTela");
               if (codigoField) codigoField.value = "";
-              if (localField) localField.value = "";
               
               console.log("🧹 Dispositivo desativado e dados limpos. Aguardando novo código e local.");
               return; // NÃO iniciar automaticamente
@@ -643,23 +713,18 @@ async function verificarCodigoSalvo() {
     // FALLBACK: Método antigo (localStorage) - retrocompatibilidade
     // Usar o código já lido do localStorage (se não encontrou no banco)
     const codigoSalvo = codigoLocal || localStorage.getItem(CODIGO_DISPLAY_KEY);
-    const localSalvo = localLocal || localStorage.getItem(LOCAL_TELA_KEY);
     
-    if (codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim()) {
-      console.log("📱 Código e local salvos encontrados (localStorage fallback):", codigoSalvo, localSalvo);
+    if (codigoSalvo && codigoSalvo.trim()) {
+      console.log("📱 Código salvo encontrado (localStorage fallback):", codigoSalvo);
       
       // Preencher o campo com o código salvo
       const codigoField = document.getElementById("codigoTela");
-      const localField = document.getElementById("localTela");
       if (codigoField) {
         codigoField.value = codigoSalvo.trim().toUpperCase();
       }
-      if (localField && localSalvo) {
-        localField.value = localSalvo;
-      }
       
-      // FORÇAR fullscreen se há código E local salvos (obrigatório)
-      console.log("🔒 Código e local salvos detectados - FORÇANDO fullscreen obrigatório");
+      // FORÇAR fullscreen se há código salvo (obrigatório)
+      console.log("🔒 Código salvo detectado - FORÇANDO fullscreen obrigatório");
       setTimeout(() => entrarFullscreen(), 200);
       setTimeout(() => entrarFullscreen(), 800);
       setTimeout(() => entrarFullscreen(), 1500);
@@ -768,7 +833,6 @@ async function iniciar() {
   setupOrientationWatcher();
 
   const codigo = document.getElementById("codigoTela").value.trim().toUpperCase();
-  const local = document.getElementById("localTela").value.trim();
   
   if (!codigo) {
     showNotification("Informe o código do display!");
@@ -776,10 +840,40 @@ async function iniciar() {
     return;
   }
   
-  if (!local) {
-    showNotification("Informe o local da tela!");
-    ensureElementsVisible();
-    return;
+  // Buscar o nome do display na tabela displays
+  let local = null;
+  if (navigator.onLine) {
+    try {
+      const { data: display, error: displayError } = await client
+        .from("displays")
+        .select("codigo_unico, nome")
+        .eq("codigo_unico", codigo)
+        .maybeSingle();
+      
+      if (displayError) {
+        console.error("❌ Erro ao buscar display:", displayError);
+        showNotification("Erro ao buscar informações do display. Tente novamente.");
+        ensureElementsVisible();
+        return;
+      }
+      
+      if (!display) {
+        showNotification("❌ Código do display não encontrado!");
+        ensureElementsVisible();
+        return;
+      }
+      
+      local = display.nome || codigo; // Usa o nome do display, ou o código como fallback
+      console.log("✅ Display encontrado:", display.nome);
+    } catch (err) {
+      console.error("❌ Erro ao buscar display:", err);
+      showNotification("Erro ao buscar informações do display. Tente novamente.");
+      ensureElementsVisible();
+      return;
+    }
+  } else {
+    // Se offline, usa o código como fallback
+    local = codigo;
   }
   
   // NÃO definir codigoAtual ainda - só depois de validar
@@ -1530,7 +1624,7 @@ async function tocarLoop() {
 
           // Timeout adaptativo para internet lenta (usa velocidade já detectada)
           const hlsTimeout = networkSpeed === 'slow' ? 12000 : networkSpeed === 'fast' ? 3000 : 4000;
-          const ok = await waitForCanPlay(video, hlsTimeout);
+          const ok = await waitForVideoReady(video, hlsTimeout);
           if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
           if (!ok) { 
             console.warn("⚠️ Vídeo não ficou pronto a tempo (timeout:", hlsTimeout, "ms)");
@@ -1610,7 +1704,7 @@ async function tocarLoop() {
 
           // Timeout adaptativo para internet lenta (usa velocidade já detectada)
           const hlsTimeout = networkSpeed === 'slow' ? 12000 : networkSpeed === 'fast' ? 3000 : 4000;
-          const ok = await waitForCanPlay(video, hlsTimeout);
+          const ok = await waitForVideoReady(video, hlsTimeout);
           if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
           if (!ok) { 
             console.warn("⚠️ Vídeo não ficou pronto a tempo (timeout:", hlsTimeout, "ms)");
@@ -1664,7 +1758,7 @@ async function tocarLoop() {
                 URL.revokeObjectURL(blobUrl);
               }, { once: true });
               
-              const ok = await waitForCanPlay(video, 8000);
+              const ok = await waitForVideoReady(video, 8000);
               if (myToken !== playToken || videoToken !== currentVideoToken) { 
                 URL.revokeObjectURL(blobUrl);
                 isLoadingVideo = false; 
@@ -1700,7 +1794,7 @@ async function tocarLoop() {
 
           // Timeout adaptativo para internet lenta (usa velocidade já detectada)
           const mp4Timeout = networkSpeed === 'slow' ? 24000 : networkSpeed === 'fast' ? 6000 : 8000;
-          const ok = await waitForCanPlay(video, mp4Timeout);
+          const ok = await waitForVideoReady(video, mp4Timeout);
           if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
           if (!ok || video.readyState < 3) {
             console.warn("⚠️ Vídeo não ficou pronto (readyState:", video.readyState, ", timeout:", mp4Timeout, "ms)");
@@ -1932,6 +2026,183 @@ function waitForCanPlay(videoEl, timeoutMs = 7000) {
     function cleanup() { clearTimeout(t); videoEl.removeEventListener("canplay", onCanPlay); }
     videoEl.addEventListener("canplay", onCanPlay, { once: true });
   });
+}
+
+// ===== Funções de Buffering Melhoradas =====
+
+/**
+ * Verifica se o vídeo tem buffer suficiente (em segundos)
+ * @param {HTMLVideoElement} videoEl - Elemento de vídeo
+ * @param {number} minSeconds - Segundos mínimos de buffer necessário
+ * @returns {boolean} - true se tem buffer suficiente
+ */
+function hasEnoughBuffer(videoEl, minSeconds) {
+  if (!videoEl.buffered || !videoEl.buffered.length) return false;
+  if (!videoEl.duration || !isFinite(videoEl.duration)) return false;
+  
+  const bufferedEnd = videoEl.buffered.end(videoEl.buffered.length - 1);
+  const currentTime = videoEl.currentTime || 0;
+  const bufferedSeconds = bufferedEnd - currentTime;
+  
+  return bufferedSeconds >= minSeconds;
+}
+
+/**
+ * Espera o vídeo ter buffer mínimo antes de tocar (modo progressivo)
+ * @param {HTMLVideoElement} videoEl - Elemento de vídeo
+ * @param {number} minBufferSeconds - Segundos mínimos de buffer
+ * @param {number} timeoutMs - Timeout máximo em milissegundos
+ * @returns {Promise<boolean>} - true se conseguiu buffer suficiente
+ */
+function waitForBuffer(videoEl, minBufferSeconds, timeoutMs = 15000) {
+  return new Promise(async (resolve) => {
+    // Se já tem buffer suficiente, retorna imediatamente
+    if (hasEnoughBuffer(videoEl, minBufferSeconds)) {
+      return resolve(true);
+    }
+    
+    // Ajustar timeout baseado na velocidade de rede
+    const adaptiveTimeout = await detectNetworkSpeed().then(speed => {
+      if (speed === 'slow') return timeoutMs * 2.5;
+      if (speed === 'fast') return timeoutMs * 0.8;
+      return timeoutMs;
+    });
+    
+    let done = false;
+    let checkInterval = null;
+    let timeoutId = null;
+    
+    const checkBuffer = () => {
+      if (done) return;
+      
+      if (hasEnoughBuffer(videoEl, minBufferSeconds)) {
+        done = true;
+        cleanup();
+        resolve(true);
+        return;
+      }
+      
+      // Se o vídeo já carregou completamente, aceita mesmo sem buffer mínimo
+      if (videoEl.readyState >= 4) {
+        done = true;
+        cleanup();
+        resolve(true);
+        return;
+      }
+    };
+    
+    const cleanup = () => {
+      if (checkInterval) clearInterval(checkInterval);
+      if (timeoutId) clearTimeout(timeoutId);
+      videoEl.removeEventListener("progress", checkBuffer);
+      videoEl.removeEventListener("canplay", checkBuffer);
+      videoEl.removeEventListener("canplaythrough", checkBuffer);
+    };
+    
+    // Verificar periodicamente enquanto o vídeo carrega
+    checkInterval = setInterval(checkBuffer, 200);
+    
+    // Timeout máximo
+    timeoutId = setTimeout(() => {
+      if (!done) {
+        done = true;
+        cleanup();
+        // Se tem pelo menos algum buffer (mesmo que não seja o mínimo), aceita
+        const hasAnyBuffer = videoEl.buffered && videoEl.buffered.length > 0 && 
+                             videoEl.buffered.end(0) > videoEl.currentTime;
+        resolve(hasAnyBuffer || videoEl.readyState >= 3);
+      }
+    }, adaptiveTimeout);
+    
+    // Eventos do vídeo
+    videoEl.addEventListener("progress", checkBuffer);
+    videoEl.addEventListener("canplay", checkBuffer);
+    videoEl.addEventListener("canplaythrough", checkBuffer);
+    
+    // Verificação inicial
+    checkBuffer();
+  });
+}
+
+/**
+ * Espera o vídeo carregar 100% antes de tocar (modo completo)
+ * @param {HTMLVideoElement} videoEl - Elemento de vídeo
+ * @param {number} timeoutMs - Timeout máximo em milissegundos
+ * @returns {Promise<boolean>} - true se carregou completamente
+ */
+function waitForLoaded(videoEl, timeoutMs = 30000) {
+  return new Promise(async (resolve) => {
+    // Se já está completamente carregado, retorna imediatamente
+    if (videoEl.readyState >= 4) {
+      return resolve(true);
+    }
+    
+    // Ajustar timeout baseado na velocidade de rede
+    const adaptiveTimeout = await detectNetworkSpeed().then(speed => {
+      if (speed === 'slow') return timeoutMs * 3;
+      if (speed === 'fast') return timeoutMs * 0.8;
+      return timeoutMs;
+    });
+    
+    let done = false;
+    let timeoutId = null;
+    
+    const onLoaded = () => {
+      if (!done && videoEl.readyState >= 4) {
+        done = true;
+        cleanup();
+        resolve(true);
+      }
+    };
+    
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      videoEl.removeEventListener("canplaythrough", onLoaded);
+      videoEl.removeEventListener("loadeddata", onLoaded);
+    };
+    
+    // Timeout máximo
+    timeoutId = setTimeout(() => {
+      if (!done) {
+        done = true;
+        cleanup();
+        // Aceita se tem pelo menos buffer suficiente para começar
+        resolve(videoEl.readyState >= 3);
+      }
+    }, adaptiveTimeout);
+    
+    // Eventos do vídeo
+    videoEl.addEventListener("canplaythrough", onLoaded, { once: true });
+    videoEl.addEventListener("loadeddata", onLoaded);
+    
+    // Verificação inicial
+    if (videoEl.readyState >= 4) {
+      onLoaded();
+    }
+  });
+}
+
+/**
+ * Função unificada que escolhe o modo de buffering baseado na configuração
+ * @param {HTMLVideoElement} videoEl - Elemento de vídeo
+ * @param {number} baseTimeoutMs - Timeout base em milissegundos
+ * @returns {Promise<boolean>} - true se está pronto para tocar
+ */
+async function waitForVideoReady(videoEl, baseTimeoutMs = 7000) {
+  switch (BUFFERING_MODE) {
+    case "full":
+      return await waitForLoaded(videoEl, baseTimeoutMs * 2);
+    
+    case "progressive":
+      // Primeiro espera canplay, depois espera buffer mínimo
+      const canPlay = await waitForCanPlay(videoEl, baseTimeoutMs);
+      if (!canPlay) return false;
+      return await waitForBuffer(videoEl, MIN_BUFFER_SECONDS, baseTimeoutMs * 1.5);
+    
+    case "immediate":
+    default:
+      return await waitForCanPlay(videoEl, baseTimeoutMs);
+  }
 }
 
 // ===== Verificar código do dispositivo ao final de ciclo =====
@@ -2438,15 +2709,55 @@ async function pararTudoMostrarLogin() {
   // Mostrar tela de login (já faz tudo necessário)
   mostrarLogin();
   
-  // Limpar campos (não restaurar código salvo se is_locked = false)
+  // Limpar campo (não restaurar código salvo se is_locked = false)
   const codigoField = document.getElementById("codigoTela");
-  const localField = document.getElementById("localTela");
   if (codigoField) {
     codigoField.value = "";
     codigoField.focus();
   }
-  if (localField) {
-    localField.value = "";
+}
+
+// ===== Função para forçar foco no player =====
+function forcarFocoNoPlayer() {
+  try {
+    // Tentar focar no vídeo primeiro
+    const video = document.getElementById("videoPlayer");
+    if (video && video.style.display !== 'none') {
+      video.focus();
+      // Adicionar tabIndex temporariamente se não tiver (para permitir foco)
+      if (!video.hasAttribute('tabindex')) {
+        video.setAttribute('tabindex', '-1');
+      }
+    }
+    
+    // Tentar focar na imagem se vídeo não estiver visível
+    const img = document.getElementById("imgPlayer");
+    if (img && img.style.display !== 'none') {
+      img.focus();
+      if (!img.hasAttribute('tabindex')) {
+        img.setAttribute('tabindex', '-1');
+      }
+    }
+    
+    // Focar no body/document como fallback
+    document.body.focus();
+    if (document.body && !document.body.hasAttribute('tabindex')) {
+      document.body.setAttribute('tabindex', '-1');
+    }
+    window.focus();
+    
+    // Para garantir foco, também tentar com um elemento invisível focável
+    let focusHelper = document.getElementById('focus-helper');
+    if (!focusHelper) {
+      focusHelper = document.createElement('div');
+      focusHelper.id = 'focus-helper';
+      focusHelper.style.cssText = 'position: fixed; top: -9999px; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none;';
+      focusHelper.tabIndex = -1;
+      document.body.appendChild(focusHelper);
+    }
+    focusHelper.focus();
+  } catch (err) {
+    console.warn("⚠️ Erro ao forçar foco:", err);
   }
 }
 
@@ -2466,6 +2777,8 @@ function entrarFullscreen() {
   
   if (temCodigoCompleto) {
     console.log("🔒 Código e local salvos detectados - OBRIGANDO fullscreen");
+    // PRIMEIRO: Forçar foco no player antes de tentar fullscreen
+    forcarFocoNoPlayer();
   }
   
   // Tentar entrar em fullscreen com várias estratégias
@@ -2490,22 +2803,43 @@ function entrarFullscreen() {
     return Promise.resolve(false);
   };
   
-  // Tentar imediatamente
+  // Tentar imediatamente (já com foco garantido se temCodigoCompleto)
   tryFullscreen().then(success => {
     if (!success && temCodigoCompleto) {
-      // Se falhar E há código salvo, tentar mais agressivamente
-      setTimeout(() => tryFullscreen(), 100);
-      setTimeout(() => tryFullscreen(), 300);
-      setTimeout(() => tryFullscreen(), 600);
+      // Se falhar E há código salvo, tentar mais agressivamente com múltiplas tentativas
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        tryFullscreen();
+      }, 100);
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        tryFullscreen();
+      }, 300);
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        tryFullscreen();
+      }, 600);
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        tryFullscreen();
+      }, 1000);
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        tryFullscreen();
+      }, 2000);
     } else if (!success) {
       // Se falhar sem código salvo, tentar uma vez mais
-      setTimeout(() => tryFullscreen(), 200);
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        tryFullscreen();
+      }, 200);
     }
   });
   
   // Para Android Chrome, também tentar com o body
   if (/Android/i.test(navigator.userAgent)) {
     setTimeout(() => {
+      forcarFocoNoPlayer();
       const body = document.body;
       if (body.requestFullscreen) {
         body.requestFullscreen().catch(() => {});
@@ -2517,6 +2851,7 @@ function entrarFullscreen() {
     // Se há código salvo, tentar mais vezes no Android
     if (temCodigoCompleto) {
       setTimeout(() => {
+        forcarFocoNoPlayer();
         const body = document.body;
         if (body.requestFullscreen) {
           body.requestFullscreen().catch(() => {});
@@ -2524,7 +2859,44 @@ function entrarFullscreen() {
           body.webkitRequestFullscreen();
         }
       }, 300);
+      setTimeout(() => {
+        forcarFocoNoPlayer();
+        const body = document.body;
+        if (body.requestFullscreen) {
+          body.requestFullscreen().catch(() => {});
+        } else if (body.webkitRequestFullscreen) {
+          body.webkitRequestFullscreen();
+        }
+      }, 800);
     }
+  }
+  
+  // Se há código salvo, também tentar com o elemento de vídeo/imagem se existir
+  if (temCodigoCompleto) {
+    setTimeout(() => {
+      forcarFocoNoPlayer();
+      const video = document.getElementById("videoPlayer");
+      const img = document.getElementById("imgPlayer");
+      const mediaElement = video && video.style.display !== 'none' ? video : (img && img.style.display !== 'none' ? img : null);
+      
+      if (mediaElement) {
+        // Garantir que o elemento tenha foco antes de tentar fullscreen
+        mediaElement.focus();
+        if (!mediaElement.hasAttribute('tabindex')) {
+          mediaElement.setAttribute('tabindex', '-1');
+        }
+        
+        if (mediaElement.requestFullscreen) {
+          mediaElement.requestFullscreen().catch(() => {});
+        } else if (mediaElement.webkitRequestFullscreen) {
+          mediaElement.webkitRequestFullscreen();
+        } else if (mediaElement.mozRequestFullScreen) {
+          mediaElement.mozRequestFullScreen();
+        } else if (mediaElement.msRequestFullscreen) {
+          mediaElement.msRequestFullscreen();
+        }
+      }
+    }, 500);
   }
 }
 
