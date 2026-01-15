@@ -24,6 +24,10 @@ jobs:
     - name: Instalar dependências
       run: npm install
       
+    - name: Gerar ícones e configurar splash screen
+      run: npm run setup:icons
+      continue-on-error: true # Continua mesmo se vision_logo.png não existir
+      
     - name: Build do projeto
       run: npm run build
       
