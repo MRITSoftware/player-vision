@@ -69,47 +69,6 @@
     @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes fadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-20px); } }
 
-    /* Painel de Debug Visual */
-    #debugPanel {
-      position: fixed;
-      bottom: 10px;
-      left: 10px;
-      right: 10px;
-      max-height: 200px;
-      background: rgba(0, 0, 0, 0.9);
-      color: #0f0;
-      font-family: 'Courier New', monospace;
-      font-size: 11px;
-      padding: 10px;
-      border: 2px solid #0f0;
-      border-radius: 5px;
-      overflow-y: auto;
-      z-index: 10000;
-      display: none;
-    }
-    #debugPanel.show { display: block; }
-    #debugPanel .log { margin: 2px 0; }
-    #debugPanel .error { color: #f00; }
-    #debugPanel .warn { color: #ff0; }
-    #debugPanel .info { color: #0ff; }
-    #debugToggle {
-      position: fixed;
-      bottom: 10px;
-      right: 10px;
-      width: 50px;
-      height: 50px;
-      background: rgba(0, 255, 0, 0.3);
-      border: 2px solid #0f0;
-      border-radius: 50%;
-      color: #0f0;
-      font-size: 20px;
-      cursor: pointer;
-      z-index: 10001;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
     #codigoInput {
       display: flex; flex-direction: column; align-items: center; text-align: center;
       gap: 20px; padding: 40px; border-radius: 12px;
@@ -186,230 +145,109 @@
   <!-- Rodapé -->
   <footer id="rodape"><a href="https://www.mrit.com.br" target="_blank" style="color: inherit; text-decoration: none;">© 2025 MRIT</a></footer>
 
-  <!-- Painel de Debug Visual -->
-  <div id="debugPanel"></div>
-  <button id="debugToggle" title="Mostrar/Ocultar Debug">🔍</button>
-
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
   <!-- hls.js para buffer via MSE (apenas quando URL for .m3u8) -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <!-- Capacitor para funcionalidades nativas (APK) -->
   <script type="module" src="/capacitor-setup.js"></script>
-  <script src="player.js" onerror="addDebugLog('❌ Erro ao carregar player.js: ' + (this.src || 'caminho desconhecido'), 'error'); console.error('Erro ao carregar player.js:', this.src);"></script>
+  <script src="player.js"></script>
 
   <script>
-    // Sistema de Debug Visual
-    const debugPanel = document.getElementById('debugPanel');
-    const debugToggle = document.getElementById('debugToggle');
-    let debugLogs = [];
-    const MAX_LOGS = 50;
-
-    function addDebugLog(message, type = 'info') {
-      try {
-        const timestamp = new Date().toLocaleTimeString();
-        const logEntry = { time: timestamp, message, type };
-        debugLogs.push(logEntry);
-        
-        // Limitar quantidade de logs
-        if (debugLogs.length > MAX_LOGS) {
-          debugLogs.shift();
-        }
-        
-        // Atualizar painel se estiver visível
-        if (debugPanel && debugPanel.classList.contains('show')) {
-          updateDebugPanel();
-        }
-      } catch (e) {
-        // Ignorar erros no debug para não causar loop
+    // Forçar fullscreen permanente quando app carregar
+    function entrarFullscreen() {
+      const elem = document.documentElement;
+      if (elem.requestFullscreen) {
+        elem.requestFullscreen().catch(err => console.log('Fullscreen error:', err));
+      } else if (elem.webkitRequestFullscreen) {
+        elem.webkitRequestFullscreen();
+      } else if (elem.mozRequestFullScreen) {
+        elem.mozRequestFullScreen();
+      } else if (elem.msRequestFullscreen) {
+        elem.msRequestFullscreen();
       }
     }
 
-    function updateDebugPanel() {
-      debugPanel.innerHTML = debugLogs.map(log => {
-        return `<div class="log ${log.type}">[${log.time}] ${log.message}</div>`;
-      }).join('');
-      debugPanel.scrollTop = debugPanel.scrollHeight;
-    }
-
-    debugToggle.addEventListener('click', () => {
-      debugPanel.classList.toggle('show');
-      if (debugPanel.classList.contains('show')) {
-        updateDebugPanel();
-        debugToggle.textContent = '✖';
-      } else {
-        debugToggle.textContent = '🔍';
-      }
-    });
-
-    // Interceptar console.log, console.error, console.warn (sem loop)
-    const originalLog = console.log;
-    const originalError = console.error;
-    const originalWarn = console.warn;
-    let isLogging = false; // Flag para evitar loop
-
-    console.log = function(...args) {
-      originalLog.apply(console, args);
-      if (!isLogging) {
-        isLogging = true;
-        addDebugLog(args.join(' '), 'info');
-        isLogging = false;
-      }
-    };
-
-    console.error = function(...args) {
-      originalError.apply(console, args);
-      if (!isLogging) {
-        isLogging = true;
-        addDebugLog(args.join(' '), 'error');
-        isLogging = false;
-      }
-    };
-
-    console.warn = function(...args) {
-      originalWarn.apply(console, args);
-      if (!isLogging) {
-        isLogging = true;
-        addDebugLog(args.join(' '), 'warn');
-        isLogging = false;
-      }
-    };
-
-    // Verificar se player.js carregou após um delay
-    setTimeout(() => {
-      if (typeof startPlayer === 'undefined') {
-        addDebugLog('⚠️ player.js ainda não carregou após 2 segundos', 'warn');
-        addDebugLog('Tentando carregar manualmente...', 'info');
-        
-        // Tentar carregar manualmente
-        const script = document.createElement('script');
-        script.src = './player.js';
-        script.onerror = function() {
-          addDebugLog('❌ Falha ao carregar player.js manualmente de: ./player.js', 'error');
-          // Tentar outros caminhos
-          const script2 = document.createElement('script');
-          script2.src = '/player.js';
-          script2.onerror = function() {
-            addDebugLog('❌ Falha ao carregar player.js de: /player.js', 'error');
-            addDebugLog('Verifique se o arquivo existe no build', 'error');
-          };
-          script2.onload = function() {
-            addDebugLog('✅ player.js carregado de: /player.js', 'info');
-            checkFunctions();
-          };
-          document.head.appendChild(script2);
-        };
-        script.onload = function() {
-          addDebugLog('✅ player.js carregado de: ./player.js', 'info');
-          checkFunctions();
-        };
-        document.head.appendChild(script);
-      } else {
-        checkFunctions();
-      }
-    }, 2000);
-    
-    function checkFunctions() {
-      addDebugLog('🔍 Verificando funções disponíveis...', 'info');
-      addDebugLog('  - startPlayer: ' + typeof startPlayer, typeof startPlayer === 'function' ? 'info' : 'error');
-      addDebugLog('  - iniciar: ' + typeof iniciar, typeof iniciar === 'function' ? 'info' : 'error');
-      addDebugLog('  - entrarFullscreen: ' + typeof entrarFullscreen, typeof entrarFullscreen === 'function' ? 'info' : 'error');
-      
-      // Verificar se botão existe
-      const btnEntrar = document.getElementById("btnEntrar");
-      addDebugLog('  - btnEntrar existe: ' + !!btnEntrar, btnEntrar ? 'info' : 'error');
-      
-      if (!btnEntrar) {
-        addDebugLog('❌ Botão btnEntrar não encontrado!', 'error');
-      }
-    }
-    
-    // Verificar imediatamente também
+    // Tentar fullscreen imediatamente ao carregar
     window.addEventListener('load', () => {
-      setTimeout(checkFunctions, 100);
+      entrarFullscreen();
+      // Múltiplas tentativas para garantir
+      setTimeout(entrarFullscreen, 100);
+      setTimeout(entrarFullscreen, 300);
+      setTimeout(entrarFullscreen, 600);
+      setTimeout(entrarFullscreen, 1000);
+      setTimeout(entrarFullscreen, 2000);
     });
-    
+
+    // Reativar fullscreen se sair
+    document.addEventListener('fullscreenchange', () => {
+      if (!document.fullscreenElement) {
+        setTimeout(entrarFullscreen, 100);
+      }
+    });
+
+    document.addEventListener('webkitfullscreenchange', () => {
+      if (!document.webkitFullscreenElement) {
+        setTimeout(entrarFullscreen, 100);
+      }
+    });
+
+    document.addEventListener('mozfullscreenchange', () => {
+      if (!document.mozFullScreenElement) {
+        setTimeout(entrarFullscreen, 100);
+      }
+    });
+
+    document.addEventListener('MSFullscreenChange', () => {
+      if (!document.msFullscreenElement) {
+        setTimeout(entrarFullscreen, 100);
+      }
+    });
+
+    // Reativar quando ganha foco
+    window.addEventListener('focus', () => {
+      entrarFullscreen();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        entrarFullscreen();
+      }
+    });
+
+    // Reativar quando página é mostrada
+    window.addEventListener('pageshow', () => {
+      entrarFullscreen();
+    });
+
+    // Reativar quando redimensiona (pode indicar saída do fullscreen)
+    window.addEventListener('resize', () => {
+      setTimeout(entrarFullscreen, 100);
+    });
+
+    // Botão iniciar
     document.getElementById("btnEntrar").addEventListener("click", () => {
-      addDebugLog('🔘 Botão clicado - chamando startPlayer()', 'info');
-      try {
-        if (typeof startPlayer === 'function') {
-          addDebugLog('✅ startPlayer é uma função, chamando...', 'info');
-          startPlayer();
-          addDebugLog('✅ startPlayer() chamada com sucesso', 'info');
-        } else {
-          const errorMsg = '❌ startPlayer não é uma função! Tipo: ' + typeof startPlayer;
-          addDebugLog(errorMsg, 'error');
-          alert('Erro: startPlayer não está disponível. Tipo: ' + typeof startPlayer + '\n\nVeja o painel de debug (botão 🔍)');
-        }
-      } catch (error) {
-        const errorMsg = '❌ Erro ao chamar startPlayer: ' + error.message;
-        addDebugLog(errorMsg, 'error');
-        addDebugLog('Stack: ' + error.stack, 'error');
-        alert('Erro ao iniciar: ' + error.message + '\n\nVeja o painel de debug (botão 🔍)');
+      if (typeof startPlayer === 'function') {
+        startPlayer();
+        // Forçar fullscreen após iniciar
+        setTimeout(entrarFullscreen, 100);
+        setTimeout(entrarFullscreen, 500);
       }
     });
     
-    // Forçar fullscreen quando a página carrega se já estiver em modo standalone
+    // SEMPRE forçar fullscreen quando app carregar (APK/PWA)
     window.addEventListener('load', () => {
-      // Verificar se há código salvo (player ativo)
-      const codigoSalvo = localStorage.getItem('mrit_display_codigo');
-      const temCodigoSalvo = codigoSalvo && codigoSalvo.trim();
-      
-      // Verificar se é PWA instalado ou APK
       const isPWA = window.matchMedia('(display-mode: standalone)').matches || 
                     window.navigator.standalone === true ||
                     document.referrer.includes('android-app://');
       
-      if (temCodigoSalvo && typeof entrarFullscreen === 'function') {
-        console.log("🔒 Código salvo detectado - Escondendo login e FORÇANDO fullscreen obrigatório");
-        
-        // Esconder elementos de login IMEDIATAMENTE (sem delay para não aparecer brevemente)
-        const inputDiv = document.getElementById("codigoInput");
-        const rodape = document.getElementById("rodape");
-        const logo = document.getElementById("logo");
-        if (inputDiv) {
-          inputDiv.style.display = "none";
-          inputDiv.style.opacity = "0";
-          inputDiv.style.visibility = "hidden";
-        }
-        if (rodape) {
-          rodape.style.display = "none";
-          rodape.style.opacity = "0";
-          rodape.style.visibility = "hidden";
-        }
-        if (logo) {
-          logo.style.display = "none";
-          logo.style.opacity = "0";
-          logo.style.visibility = "hidden";
-        }
-        
-        // Tentar fullscreen múltiplas vezes ao carregar
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 100);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 300);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 600);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 1000);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 2000);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 3500);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 5000);
-        setTimeout(() => {
-          entrarFullscreen();
-        }, 7000);
-      } else if (isPWA && typeof entrarFullscreen === 'function') {
-        // Mesmo sem código, tentar se for PWA
-        setTimeout(() => entrarFullscreen(), 500);
+      // Se for APK/PWA, sempre entrar em fullscreen
+      if (isPWA) {
+        entrarFullscreen();
+        setTimeout(entrarFullscreen, 100);
+        setTimeout(entrarFullscreen, 300);
+        setTimeout(entrarFullscreen, 600);
+        setTimeout(entrarFullscreen, 1000);
+        setTimeout(entrarFullscreen, 2000);
       }
     });
     
@@ -438,116 +276,42 @@
     // Funções removidas: simularCliqueNaTela e forcarFocoNoPlayer
     // Essas funções foram removidas pois não são mais necessárias
     
-    // Função auxiliar para verificar e forçar fullscreen
-    function verificarEForcarFullscreen(contexto = '') {
-      const codigoSalvo = localStorage.getItem('mrit_display_codigo');
-      const localSalvo = localStorage.getItem('mrit_local_tela');
-      const temCodigoCompleto = codigoSalvo && codigoSalvo.trim() && localSalvo && localSalvo.trim();
+    // SEMPRE reativar fullscreen se sair (modo permanente)
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches || 
+                  window.navigator.standalone === true ||
+                  document.referrer.includes('android-app://');
+    
+    if (isPWA) {
+      // Reativar fullscreen quando ganha foco
+      window.addEventListener('focus', () => {
+        entrarFullscreen();
+      });
       
-      // Só tentar fullscreen se tiver código salvo E o player estiver ativo (não na tela de login)
-      if (temCodigoCompleto && typeof entrarFullscreen === 'function' && isPlayerAtivo()) {
-        // Verificar se já está em fullscreen
-        const jaEstaFullscreen = document.fullscreenElement || 
-                                  document.webkitFullscreenElement || 
-                                  document.mozFullScreenElement || 
-                                  document.msFullscreenElement;
-        
-        if (!jaEstaFullscreen) {
-          console.log(`🔄 ${contexto} - Tentando fullscreen automático...`);
-          // Múltiplas tentativas com delays progressivos
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 100);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 300);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 600);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 1000);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 1500);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 2500);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 4000);
-          setTimeout(() => {
-            if (isPlayerAtivo()) {
-              entrarFullscreen();
-            }
-          }, 6000);
+      // Reativar quando fica visível
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          entrarFullscreen();
         }
-      }
+      });
+      
+      // Reativar quando página é mostrada
+      window.addEventListener('pageshow', () => {
+        entrarFullscreen();
+      });
+      
+      // Reativar quando redimensiona
+      window.addEventListener('resize', () => {
+        clearTimeout(window.resizeTimeout);
+        window.resizeTimeout = setTimeout(() => {
+          entrarFullscreen();
+        }, 100);
+      });
+      
+      // Reativar quando toca na tela
+      document.addEventListener('touchstart', () => {
+        entrarFullscreen();
+      }, { passive: true });
     }
-    
-    // Tentar fullscreen quando a página ganha foco (ao reabrir o app)
-    window.addEventListener('focus', () => {
-      verificarEForcarFullscreen('App ganhou foco');
-    });
-    
-    // Tentar fullscreen quando a página fica visível (ao voltar do background)
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        verificarEForcarFullscreen('Página ficou visível');
-      }
-    });
-    
-    // Tentar fullscreen quando a página é mostrada (pageshow - ao voltar do cache)
-    window.addEventListener('pageshow', (event) => {
-      // Tentar sempre, não só se veio do cache
-      verificarEForcarFullscreen('Página mostrada');
-    });
-    
-    // Tentar fullscreen quando a janela é redimensionada (pode indicar volta do fullscreen)
-    window.addEventListener('resize', () => {
-      // Debounce para não executar muitas vezes
-      clearTimeout(window.resizeTimeout);
-      window.resizeTimeout = setTimeout(() => {
-        verificarEForcarFullscreen('Janela redimensionada');
-      }, 500);
-    });
-    
-    // Tentar fullscreen quando o mouse/touch retorna (indica interação do usuário)
-    document.addEventListener('mouseenter', () => {
-      verificarEForcarFullscreen('Mouse entrou na página');
-    }, { once: true });
-    
-    // Para mobile: tentar quando toca na tela
-    document.addEventListener('touchstart', () => {
-      verificarEForcarFullscreen('Touch detectado');
-    }, { once: true, passive: true });
-    
-    // Monitorar mudanças no fullscreen e tentar reativar se sair
-    document.addEventListener('fullscreenchange', () => {
-      if (!document.fullscreenElement) {
-        setTimeout(() => verificarEForcarFullscreen('Fullscreen foi desativado'), 500);
-      }
-    });
-    
-    document.addEventListener('webkitfullscreenchange', () => {
-      if (!document.webkitFullscreenElement) {
-        setTimeout(() => verificarEForcarFullscreen('Fullscreen WebKit foi desativado'), 500);
-      }
-    });
   </script>
 </body>
 </html>
