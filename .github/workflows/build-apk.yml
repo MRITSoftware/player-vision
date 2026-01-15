@@ -48,6 +48,12 @@ jobs:
     - name: Sincronizar Capacitor
       run: npx cap sync android
       
+    - name: Copiar MainActivity.java para o projeto Android
+      run: |
+        mkdir -p android/app/src/main/java/com/mritsoftware/player
+        cp MainActivity.java android/app/src/main/java/com/mritsoftware/player/MainActivity.java
+        echo "✅ MainActivity.java copiado"
+      
     - name: Configurar permissões do Gradle
       run: chmod +x android/gradlew
       
