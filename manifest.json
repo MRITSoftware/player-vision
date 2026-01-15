@@ -1,6 +1,6 @@
 {
-  "name": "MRIT Player",
-  "short_name": "MRIT",
+  "name": "Vision Player",
+  "short_name": "Vision",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

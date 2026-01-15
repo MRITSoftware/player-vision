@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const inputFile = 'vision_logo.png';
+const inputFile = 'icon-192.png';
 const iconSizes = [192, 512];
 const androidIconSizes = [
   { folder: 'mipmap-mdpi', size: 48 },
@@ -24,23 +24,12 @@ async function generateIcons() {
 
   console.log(`🎨 Gerando ícones a partir de ${inputFile}...\n`);
 
-  // 1. Gerar ícones para PWA (icon-192.png e icon-512.png)
-  console.log('📱 Gerando ícones PWA...');
-  for (const size of iconSizes) {
-    try {
-      const outputFile = `icon-${size}.png`;
-      
-      await sharp(inputFile)
-        .resize(size, size, {
-          fit: 'contain',
-          background: { r: 0, g: 0, b: 0, alpha: 0 } // Fundo transparente
-        })
-        .toFile(outputFile);
-      
-      console.log(`   ✅ ${outputFile} gerado (${size}x${size}px)`);
-    } catch (error) {
-      console.error(`   ❌ Erro ao gerar icon-${size}.png:`, error.message);
-    }
+  // 1. Verificar se icon-192.png existe, se não, pular geração de ícones PWA
+  // (já que estamos usando icon-192.png como fonte)
+  if (existsSync('icon-192.png')) {
+    console.log('📱 Ícone PWA icon-192.png já existe, usando como fonte para Android...');
+  } else {
+    console.log('⚠️  icon-192.png não encontrado! Certifique-se de que o arquivo existe.');
   }
 
   // 2. Gerar ícones para Android (mipmap folders)
@@ -106,10 +95,9 @@ async function generateIcons() {
 
   console.log('\n✅ Configuração concluída!');
   console.log('\n📋 Próximos passos:');
-  console.log('   1. Os ícones PWA (icon-192.png e icon-512.png) foram gerados');
-  console.log('   2. Faça upload deles para o servidor');
-  console.log('   3. Execute: npm run capacitor:sync');
-  console.log('   4. O splash screen e ícones do Android serão configurados automaticamente');
+  console.log('   1. Os ícones do Android foram gerados a partir de icon-192.png');
+  console.log('   2. Execute: npm run capacitor:sync');
+  console.log('   3. O splash screen e ícones do Android estão configurados');
 }
 
 generateIcons().catch(console.error);

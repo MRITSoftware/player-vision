@@ -1,6 +1,6 @@
 {
   "appId": "com.mritsoftware.player",
-  "appName": "MRIT Player",
+  "appName": "Vision Player",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"

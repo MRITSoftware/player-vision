@@ -1,4 +1,4 @@
-name: Build APK - MRIT Player
+name: Build APK - Vision Player
 
 on:
   push:
@@ -72,7 +72,7 @@ jobs:
     - name: Upload APK como artefato
       uses: actions/upload-artifact@v4
       with:
-        name: mrit-player-apk
+        name: vision-player-apk
         path: android/app/build/outputs/apk/debug/app-debug.apk
         retention-days: 30
         
@@ -82,7 +82,7 @@ jobs:
       with:
         files: android/app/build/outputs/apk/debug/app-debug.apk
         body: |
-          ## 📱 MRIT Player APK
+          ## 📱 Vision Player APK
           
           APK gerado automaticamente via GitHub Actions.
           
