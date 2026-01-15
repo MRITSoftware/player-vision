@@ -1,6 +1,4 @@
-import { defineConfig } from '@capacitor/cli';
-
-export default defineConfig({
+const config = {
   appId: 'com.mritsoftware.player',
   appName: 'MRIT Player',
   webDir: 'dist',
@@ -34,4 +32,6 @@ export default defineConfig({
       keepAwake: true
     }
   }
-});
+};
+
+export default config;

@@ -12,7 +12,7 @@
     const capacitorCore = await import('@capacitor/core');
     Capacitor = capacitorCore.Capacitor;
     
-    const keepAwakeModule = await import('@capacitor/keep-awake');
+    const keepAwakeModule = await import('@capacitor-community/keep-awake');
     KeepAwake = keepAwakeModule.KeepAwake;
     
     const statusBarModule = await import('@capacitor/status-bar');
