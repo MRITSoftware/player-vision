@@ -195,7 +195,7 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <!-- Capacitor para funcionalidades nativas (APK) -->
   <script type="module" src="/capacitor-setup.js"></script>
-  <script src="player.js"></script>
+  <script src="player.js" onerror="addDebugLog('❌ Erro ao carregar player.js: ' + (this.src || 'caminho desconhecido'), 'error'); console.error('Erro ao carregar player.js:', this.src);"></script>
 
   <script>
     // Sistema de Debug Visual
@@ -274,12 +274,45 @@
       }
     };
 
-    // Debug: Verificar se funções estão disponíveis
-    window.addEventListener('load', () => {
+    // Verificar se player.js carregou após um delay
+    setTimeout(() => {
+      if (typeof startPlayer === 'undefined') {
+        addDebugLog('⚠️ player.js ainda não carregou após 2 segundos', 'warn');
+        addDebugLog('Tentando carregar manualmente...', 'info');
+        
+        // Tentar carregar manualmente
+        const script = document.createElement('script');
+        script.src = './player.js';
+        script.onerror = function() {
+          addDebugLog('❌ Falha ao carregar player.js manualmente de: ./player.js', 'error');
+          // Tentar outros caminhos
+          const script2 = document.createElement('script');
+          script2.src = '/player.js';
+          script2.onerror = function() {
+            addDebugLog('❌ Falha ao carregar player.js de: /player.js', 'error');
+            addDebugLog('Verifique se o arquivo existe no build', 'error');
+          };
+          script2.onload = function() {
+            addDebugLog('✅ player.js carregado de: /player.js', 'info');
+            checkFunctions();
+          };
+          document.head.appendChild(script2);
+        };
+        script.onload = function() {
+          addDebugLog('✅ player.js carregado de: ./player.js', 'info');
+          checkFunctions();
+        };
+        document.head.appendChild(script);
+      } else {
+        checkFunctions();
+      }
+    }, 2000);
+    
+    function checkFunctions() {
       addDebugLog('🔍 Verificando funções disponíveis...', 'info');
-      addDebugLog('  - startPlayer: ' + typeof startPlayer, 'info');
-      addDebugLog('  - iniciar: ' + typeof iniciar, 'info');
-      addDebugLog('  - entrarFullscreen: ' + typeof entrarFullscreen, 'info');
+      addDebugLog('  - startPlayer: ' + typeof startPlayer, typeof startPlayer === 'function' ? 'info' : 'error');
+      addDebugLog('  - iniciar: ' + typeof iniciar, typeof iniciar === 'function' ? 'info' : 'error');
+      addDebugLog('  - entrarFullscreen: ' + typeof entrarFullscreen, typeof entrarFullscreen === 'function' ? 'info' : 'error');
       
       // Verificar se botão existe
       const btnEntrar = document.getElementById("btnEntrar");
@@ -288,6 +321,11 @@
       if (!btnEntrar) {
         addDebugLog('❌ Botão btnEntrar não encontrado!', 'error');
       }
+    }
+    
+    // Verificar imediatamente também
+    window.addEventListener('load', () => {
+      setTimeout(checkFunctions, 100);
     });
     
     document.getElementById("btnEntrar").addEventListener("click", () => {
