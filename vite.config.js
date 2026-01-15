@@ -1,4 +1,6 @@
 import { defineConfig } from 'vite';
+import { copyFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
 
 export default defineConfig({
   build: {
@@ -8,14 +10,24 @@ export default defineConfig({
       input: {
         main: './index.html'
       }
-    },
-    // Garantir que player.js seja copiado como está (não processado)
-    copyPublicDir: true
+    }
   },
   server: {
     port: 5173,
     host: true
   },
-  // Incluir player.js explicitamente no build
-  assetsInclude: ['**/*.js']
+  plugins: [
+    {
+      name: 'copy-player-js',
+      writeBundle() {
+        // Copiar player.js para a raiz do dist após o build
+        const playerJsPath = resolve(__dirname, 'player.js');
+        const distPath = resolve(__dirname, 'dist', 'player.js');
+        if (existsSync(playerJsPath)) {
+          copyFileSync(playerJsPath, distPath);
+          console.log('✅ player.js copiado para dist/');
+        }
+      }
+    }
+  ]
 });
