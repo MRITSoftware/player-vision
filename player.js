@@ -1644,38 +1644,14 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   playlist = Array.isArray(newPlaylist) ? newPlaylist : [];
   currentPlaylistId = playlistId ?? null;
   
-  // Se a playlist mudou, limpar cache antigo antes de salvar o novo
+  // Se a playlist mudou, o Service Worker vai limpar apenas o que não está na nova playlist
+  // Mantém automaticamente os vídeos/imagens que estão na nova playlist (cache inteligente)
   if (playlistMudou && codigoAtual) {
-    console.log("🔄 Playlist mudou, limpando cache antigo...");
+    console.log("🔄 Playlist mudou, atualizando cache...");
     console.log(`📊 Antes: ${playlistAntiga.length} itens | Depois: ${playlistNova.length} itens`);
-    // Limpar cache de vídeos do IndexedDB
-    try {
-      const keys = await idbAllKeys();
-      const prefix = `${codigoAtual}::`;
-      for (const key of keys) {
-        if (String(key).startsWith(prefix)) {
-          await idbDel(key);
-        }
-      }
-      console.log("✅ Cache de vídeos antigo limpo");
-    } catch (error) {
-      console.error("❌ Erro ao limpar cache antigo:", error);
-    }
-    
-    // Limpar cache de imagens do Service Worker
-    try {
-      const cache = await caches.open("mrit-player-cache-v12");
-      const keys = await cache.keys();
-      for (const req of keys) {
-        await cache.delete(req);
-      }
-      console.log("✅ Cache de imagens antigo limpo");
-    } catch (error) {
-      console.error("❌ Erro ao limpar cache de imagens:", error);
-    }
-    
-    // Marcar cache como não pronto para forçar recache
-    await atualizarStatusCache(codigoAtual, false);
+    console.log("💡 Service Worker vai manter cache dos itens que estão na nova playlist");
+    // Não limpar cache aqui - deixar o Service Worker fazer a limpeza inteligente
+    // O Service Worker remove apenas os vídeos que NÃO estão na nova playlist
   } else if (codigoAtual && playlistAntiga.length > 0) {
     console.log("✅ Playlist não mudou, mantendo cache existente");
   }

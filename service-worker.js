@@ -463,6 +463,18 @@ async function updateCacheForCurrentNS(playlist) {
     return keepUrls.has(url) ? null : idbDel(ks);
   }));
 
+  // 1.5) Limpa imagens do Cache API que não pertencem a este playlist
+  const cache = await caches.open(CACHE_NAME);
+  const cacheKeys = await cache.keys();
+  await Promise.all(cacheKeys.map(async (req) => {
+    const url = req.url;
+    const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+    if (isImage && !keepUrls.has(url)) {
+      await cache.delete(req);
+      dlog("imagem removida do cache (não está na nova playlist):", url);
+    }
+  }));
+
   // 2) Precache sequencial, limitado
   let cachedCount = 0;
 
@@ -483,9 +495,15 @@ async function updateCacheForCurrentNS(playlist) {
       }
 
       if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)) {
+        // Verificar se já existe no cache antes de baixar
+        const cached = await cache.match(url);
+        if (cached) {
+          dlog("imagem já em cache, pulando:", url);
+          continue;
+        }
+        
         const resp = await netFetch(url, { cache: "no-store" }, 5000);
         if (resp.ok) {
-          const cache = await caches.open(CACHE_NAME);
           await cache.put(url, resp.clone());
         }
         continue;
