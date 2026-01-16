@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const inputFile = 'icon-192.png';
+const inputFile = 'vision_logo.png';
 const iconSizes = [192, 512];
 const androidIconSizes = [
   { folder: 'mipmap-mdpi', size: 48 },
@@ -24,12 +24,26 @@ async function generateIcons() {
 
   console.log(`🎨 Gerando ícones a partir de ${inputFile}...\n`);
 
-  // 1. Verificar se icon-192.png existe, se não, pular geração de ícones PWA
-  // (já que estamos usando icon-192.png como fonte)
-  if (existsSync('icon-192.png')) {
-    console.log('📱 Ícone PWA icon-192.png já existe, usando como fonte para Android...');
-  } else {
-    console.log('⚠️  icon-192.png não encontrado! Certifique-se de que o arquivo existe.');
+  // 1. Gerar ícones PWA (icon-192.png e icon-512.png) se não existirem
+  console.log('📱 Gerando ícones PWA...');
+  for (const size of iconSizes) {
+    const outputFile = `icon-${size}.png`;
+    if (!existsSync(outputFile)) {
+      try {
+        await sharp(inputFile)
+          .resize(size, size, {
+            fit: 'contain',
+            background: { r: 255, g: 255, b: 255, alpha: 0 } // Fundo transparente
+          })
+          .toFile(outputFile);
+        
+        console.log(`   ✅ ${outputFile} gerado (${size}x${size}px)`);
+      } catch (error) {
+        console.error(`   ❌ Erro ao gerar ${outputFile}:`, error.message);
+      }
+    } else {
+      console.log(`   ℹ️  ${outputFile} já existe, pulando...`);
+    }
   }
 
   // 2. Gerar ícones para Android (mipmap folders)
@@ -56,6 +70,30 @@ async function generateIcons() {
         console.log(`   ✅ ${outputFile} gerado (${size}x${size}px)`);
       } catch (error) {
         console.error(`   ❌ Erro ao gerar ícone ${folder}:`, error.message);
+      }
+    }
+    
+    // Gerar também o ícone redondo (ic_launcher_round)
+    console.log('\n📱 Gerando ícones redondos Android...');
+    for (const { folder, size } of androidIconSizes) {
+      try {
+        const mipmapPath = `${androidPath}/${folder}`;
+        if (!existsSync(mipmapPath)) {
+          mkdirSync(mipmapPath, { recursive: true });
+        }
+        
+        const outputFile = `${mipmapPath}/ic_launcher_round.png`;
+        
+        await sharp(inputFile)
+          .resize(size, size, {
+            fit: 'contain',
+            background: { r: 0, g: 0, b: 0, alpha: 0 }
+          })
+          .toFile(outputFile);
+        
+        console.log(`   ✅ ${outputFile} gerado (${size}x${size}px)`);
+      } catch (error) {
+        console.error(`   ❌ Erro ao gerar ícone redondo ${folder}:`, error.message);
       }
     }
   } else {
@@ -102,9 +140,10 @@ async function generateIcons() {
 
   console.log('\n✅ Configuração concluída!');
   console.log('\n📋 Próximos passos:');
-  console.log('   1. Os ícones do Android foram gerados a partir de icon-192.png');
-  console.log('   2. Execute: npm run capacitor:sync');
-  console.log('   3. O splash screen e ícones do Android estão configurados');
+  console.log('   1. Os ícones do Android foram gerados a partir de vision_logo.png');
+  console.log('   2. Os ícones PWA (icon-192.png e icon-512.png) foram gerados');
+  console.log('   3. Execute: npm run capacitor:sync');
+  console.log('   4. O splash screen e ícones do Android estão configurados com vision_logo.png');
 }
 
 generateIcons().catch(console.error);
