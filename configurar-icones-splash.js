@@ -66,9 +66,16 @@ async function generateIcons() {
   // 3. Gerar splash screen para Android
   console.log('\n🖼️  Gerando splash screen Android...');
   const drawablePath = `${androidPath}/drawable`;
+  const splashSourceFile = 'vision_logo.png';
   
   if (existsSync(androidPath)) {
     try {
+      if (!existsSync(splashSourceFile)) {
+        console.error(`   ❌ Arquivo ${splashSourceFile} não encontrado!`);
+        console.log(`   ℹ️  O splash screen precisa do arquivo vision_logo.png na raiz do projeto`);
+        return;
+      }
+      
       if (!existsSync(drawablePath)) {
         mkdirSync(drawablePath, { recursive: true });
       }
@@ -77,14 +84,14 @@ async function generateIcons() {
       // Como o app é landscape, vamos criar 1920x1080
       const splashFile = `${drawablePath}/splash.png`;
       
-      await sharp(inputFile)
+      await sharp(splashSourceFile)
         .resize(1920, 1080, {
           fit: 'contain',
           background: { r: 0, g: 0, b: 0, alpha: 1 } // Fundo preto
         })
         .toFile(splashFile);
       
-      console.log(`   ✅ ${splashFile} gerado (1920x1080px)`);
+      console.log(`   ✅ ${splashFile} gerado (1920x1080px) a partir de ${splashSourceFile}`);
     } catch (error) {
       console.error(`   ❌ Erro ao gerar splash screen:`, error.message);
     }
