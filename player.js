@@ -2027,18 +2027,16 @@ async function tocarLoop() {
     (item.tipo || "").toLowerCase().includes("video") ||
     /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
 
-  // esconde ambos
-  video.style.display = "none";
-  img.style.display = "none";
-  // zerar completamente o elemento de vídeo
-  try { video.pause(); } catch {}
-  video.removeAttribute("src");
-  video.load();
-
-  img.src = "";
-
+  // NÃO esconder o conteúdo atual ainda - vamos carregar o próximo primeiro
+  // Isso evita a "piscada" entre conteúdos
+  const wasVideo = video.style.display === "block";
+  const wasImage = img.style.display === "block";
+  
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
+  
+  // Preparar elementos para o próximo conteúdo (mas manter o atual visível)
+  // Só vamos esconder o atual quando o próximo estiver pronto
 
   if (isVideo) {
     // Guard contra carregamentos concorrentes
@@ -2097,12 +2095,23 @@ async function tocarLoop() {
           const focus = item.focus || "center center";
           applyFit(video, fit, focus);
 
-          img.style.display = "none";
+          // Esconder imagem ANTES de mostrar vídeo (transição suave)
+          if (wasImage) {
+            img.style.display = "none";
+            img.classList.remove("hidden-ready");
+            img.src = "";
+          }
+          
+          // Mostrar vídeo e garantir que está visível
           video.style.display = "block";
+          video.classList.remove("hidden-ready");
+          video.style.opacity = "1";
+          
           isPlaying = true;
           videoRetryCount = 0;
           isLoadingVideo = false;
           clearTimeout(safetyTimeout);
+          
           video.play().catch((e) => {
             console.error("Erro play HLS:", e);
             video.muted = true;
@@ -2127,12 +2136,23 @@ async function tocarLoop() {
             const focus = item.focus || "center center";
             applyFit(video, fit, focus);
 
-            img.style.display = "none";
+            // Esconder imagem ANTES de mostrar vídeo (transição suave)
+            if (wasImage) {
+              img.style.display = "none";
+              img.classList.remove("hidden-ready");
+              img.src = "";
+            }
+            
+            // Mostrar vídeo e garantir que está visível
             video.style.display = "block";
+            video.classList.remove("hidden-ready");
+            video.style.opacity = "1";
+            
             isPlaying = true;
             videoRetryCount = 0;
             isLoadingVideo = false;
             clearTimeout(safetyTimeout);
+            
             video.play().catch(() => { video.muted = true; video.play(); });
           });
           hls.on(Hls.Events.ERROR, (evt, data) => {
@@ -2175,12 +2195,23 @@ async function tocarLoop() {
           const focus = item.focus || "center center";
           applyFit(video, fit, focus);
 
-          img.style.display = "none";
+          // Esconder imagem ANTES de mostrar vídeo (transição suave)
+          if (wasImage) {
+            img.style.display = "none";
+            img.classList.remove("hidden-ready");
+            img.src = "";
+          }
+          
+          // Mostrar vídeo e garantir que está visível
           video.style.display = "block";
+          video.classList.remove("hidden-ready");
+          video.style.opacity = "1";
+          
           isPlaying = true;
           videoRetryCount = 0;
           isLoadingVideo = false;
           clearTimeout(safetyTimeout);
+          
           video.play().catch(() => { video.muted = true; video.play(); });
         }
       } else {
@@ -2224,7 +2255,15 @@ async function tocarLoop() {
               console.error("Vídeo do cache não ficou pronto (readyState:", video.readyState, ")");
               cleanupBlob();
               isLoadingVideo = false; 
-              clearTimeout(safetyTimeout); 
+              clearTimeout(safetyTimeout);
+              
+              // Limpar elementos se falhou
+              if (wasImage) {
+                img.style.display = "block";
+              } else if (wasVideo) {
+                video.style.display = "block";
+              }
+              
               proximoItem(); 
               return;
             }
@@ -2260,12 +2299,24 @@ async function tocarLoop() {
                     const fit = item.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
                     const focus = item.focus || "center center";
                     applyFit(video, fit, focus);
-                    img.style.display = "none";
+                    
+                    // Esconder imagem ANTES de mostrar vídeo (transição suave)
+                    if (wasImage) {
+                      img.style.display = "none";
+                      img.classList.remove("hidden-ready");
+                      img.src = "";
+                    }
+                    
+                    // Mostrar vídeo e garantir que está visível
                     video.style.display = "block";
+                    video.classList.remove("hidden-ready");
+                    video.style.opacity = "1";
+                    
                     isPlaying = true;
                     videoRetryCount = 0;
                     isLoadingVideo = false;
                     clearTimeout(safetyTimeout);
+                    
                     video.play().catch((playError) => {
                       console.error("Erro ao reproduzir vídeo:", playError);
                       video.muted = true;
@@ -2315,12 +2366,23 @@ async function tocarLoop() {
         const focus = item.focus || "center center";
         applyFit(video, fit, focus);
 
-        img.style.display = "none";
+        // Esconder imagem ANTES de mostrar vídeo (transição suave)
+        if (wasImage) {
+          img.style.display = "none";
+          img.classList.remove("hidden-ready");
+          img.src = "";
+        }
+        
+        // Mostrar vídeo e garantir que está visível
         video.style.display = "block";
+        video.classList.remove("hidden-ready");
+        video.style.opacity = "1";
+        
         isPlaying = true;
         videoRetryCount = 0;
         isLoadingVideo = false;
         clearTimeout(safetyTimeout);
+        
         video.play().catch((playError) => {
           console.error("Erro ao reproduzir vídeo:", playError);
           video.muted = true;
@@ -2370,8 +2432,25 @@ async function tocarLoop() {
       const focus = item.focus || "center center";
       applyFit(img, fit, focus);
 
+      // Limpar vídeo anterior se estava tocando
+      if (wasVideo) {
+        try { 
+          video.pause(); 
+          video.currentTime = 0;
+          video.removeAttribute("src");
+          video.load();
+        } catch {}
+      }
+      
+      // Esconder vídeo ANTES de mostrar imagem (transição suave)
       video.style.display = "none";
+      video.classList.remove("hidden-ready");
+      
+      // Mostrar imagem e garantir que está visível
       img.style.display = "block";
+      img.classList.remove("hidden-ready");
+      img.style.opacity = "1";
+      
       isPlaying = true;
 
       if (typeof duration === "number" && duration > 0) {
