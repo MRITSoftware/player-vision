@@ -2032,6 +2032,26 @@ async function tocarLoop() {
   const wasVideo = video.style.display === "block";
   const wasImage = img.style.display === "block";
   
+  // se estamos trocando de um vídeo para outro, o elemento "video" vai
+  // perder o frame atual assim que alterarmos o src, o que gera a tal
+  // "tela preta" antes de o novo vídeo carregar. para evitar isso, capturamos
+  // um snapshot do frame atual e exibimos no <img> auxiliar até o próximo
+  // vídeo estar pronto.
+  if (wasVideo && !wasImage) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || video.clientWidth;
+      canvas.height = video.videoHeight || video.clientHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      img.src = canvas.toDataURL('image/png');
+      img.style.display = 'block';
+      // mostramos imediatamente o snapshot; não o escondemos com hidden-ready
+    } catch (err) {
+      console.warn('⚠️ Não foi possível capturar frame para transição:', err);
+    }
+  }
+
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
   
@@ -2095,8 +2115,8 @@ async function tocarLoop() {
           const focus = item.focus || "center center";
           applyFit(video, fit, focus);
 
-          // Esconder imagem ANTES de mostrar vídeo (transição suave)
-          if (wasImage) {
+          // Esconder qualquer imagem exibida ou snapshot (transição suave)
+          if (wasImage || wasVideo) {
             img.style.display = "none";
             img.classList.remove("hidden-ready");
             img.src = "";
@@ -2136,8 +2156,8 @@ async function tocarLoop() {
             const focus = item.focus || "center center";
             applyFit(video, fit, focus);
 
-            // Esconder imagem ANTES de mostrar vídeo (transição suave)
-            if (wasImage) {
+            // Esconder qualquer imagem exibida ou snapshot (transição suave)
+            if (wasImage || wasVideo) {
               img.style.display = "none";
               img.classList.remove("hidden-ready");
               img.src = "";
@@ -2195,8 +2215,8 @@ async function tocarLoop() {
           const focus = item.focus || "center center";
           applyFit(video, fit, focus);
 
-          // Esconder imagem ANTES de mostrar vídeo (transição suave)
-          if (wasImage) {
+          // Esconder qualquer imagem exibida ou snapshot (transição suave)
+          if (wasImage || wasVideo) {
             img.style.display = "none";
             img.classList.remove("hidden-ready");
             img.src = "";
@@ -2300,8 +2320,8 @@ async function tocarLoop() {
                     const focus = item.focus || "center center";
                     applyFit(video, fit, focus);
                     
-                    // Esconder imagem ANTES de mostrar vídeo (transição suave)
-                    if (wasImage) {
+                    // Esconder qualquer imagem exibida ou snapshot (transição suave)
+                    if (wasImage || wasVideo) {
                       img.style.display = "none";
                       img.classList.remove("hidden-ready");
                       img.src = "";
@@ -2367,7 +2387,7 @@ async function tocarLoop() {
         applyFit(video, fit, focus);
 
         // Esconder imagem ANTES de mostrar vídeo (transição suave)
-        if (wasImage) {
+        if (wasImage || wasVideo) {
           img.style.display = "none";
           img.classList.remove("hidden-ready");
           img.src = "";
