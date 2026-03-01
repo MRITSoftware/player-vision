@@ -1597,6 +1597,27 @@ async function iniciar() {
 
 async function carregarConteudo(codigoConteudo) {
   try {
+    const mudouConteudo = currentContentCode && currentContentCode !== codigoConteudo;
+    if (mudouConteudo) {
+      // Troca real de conteúdo: limpa completamente a mídia anterior para
+      // evitar frame residual da imagem/vídeo antigo.
+      try { video.pause(); } catch {}
+      destroyHls();
+      if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+      video.removeAttribute("src");
+      video.load();
+      video.style.display = "none";
+      video.classList.remove("hidden-ready");
+      img.src = "";
+      img.style.display = "none";
+      img.classList.remove("hidden-ready");
+      isPlaying = false;
+      isLoadingVideo = false;
+      currentItemUrl = null;
+      currentIndex = 0;
+      clearPreloadNextState();
+    }
+
     const wasPlaying = !video.paused && video.style.display === "block";
     const currentTime = video.currentTime;
     const wasVideo = video.style.display === "block";
