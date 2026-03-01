@@ -44,6 +44,7 @@ let videoRetryCount = 0;
 const MAX_VIDEO_RETRIES = 3;
 let isLoadingVideo = false;
 let currentVideoToken = 0;
+let emptyPlaylistRetryTimer = null;
 
 // ===== Variáveis de promoção =====
 let promoData = null;
@@ -1840,6 +1841,10 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 
   playlist = Array.isArray(newPlaylist) ? newPlaylist : [];
   currentPlaylistId = playlistId ?? null;
+  if (emptyPlaylistRetryTimer) {
+    clearTimeout(emptyPlaylistRetryTimer);
+    emptyPlaylistRetryTimer = null;
+  }
   
   // Se a playlist mudou, o Service Worker vai limpar apenas o que não está na nova playlist
   // Mantém automaticamente os vídeos/imagens que estão na nova playlist (cache inteligente)
@@ -1860,12 +1865,26 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     destroyHls();
     if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
     isPlaying = false;
+    video.removeAttribute("src");
+    video.load();
     video.style.display = "none";
+    video.classList.remove("hidden-ready");
     img.style.display = "none";
+    img.classList.remove("hidden-ready");
+    img.src = "";
     currentItemUrl = null;
     currentIndex = 0;
     // Playlist vazia = cache não pronto
     await atualizarStatusCache(codigoAtual, false);
+    const codigoRecarregar = currentPlaylistId || codigoAtual;
+    if (codigoRecarregar) {
+      // Fallback defensivo: se o realtime falhar, tenta recarregar até aparecer itens.
+      emptyPlaylistRetryTimer = setTimeout(async () => {
+        if (!playlist || playlist.length === 0) {
+          await carregarConteudo(codigoRecarregar);
+        }
+      }, 5000);
+    }
     return;
   }
   
@@ -1929,6 +1948,13 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   destroyHls();
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
   isPlaying = false;
+  video.removeAttribute("src");
+  video.load();
+  video.style.display = "none";
+  video.classList.remove("hidden-ready");
+  img.style.display = "none";
+  img.classList.remove("hidden-ready");
+  img.src = "";
   currentItemUrl = null;
   
   // Garantir que currentIndex esteja dentro dos limites válidos
@@ -1988,7 +2014,11 @@ async function resetAllCachesForNewCode() {
   try { video.pause(); } catch {}
   video.removeAttribute("src");
   video.load();
+  video.style.display = "none";
+  video.classList.remove("hidden-ready");
   img.src = "";
+  img.style.display = "none";
+  img.classList.remove("hidden-ready");
   
   // Marcar cache como não pronto ao trocar de código
   if (codigoAtual) {
@@ -2945,12 +2975,12 @@ function subscribePlaylistChannel(playlistId) {
           destroyHls();
           if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
           isPlaying = false;
-          await carregarConteudo(currentPlaylistId);
+          await carregarConteudo(playlistId);
           proximoItem();
           return;
         }
 
-        await carregarConteudo(currentPlaylistId);
+        await carregarConteudo(playlistId);
       }
     )
     .subscribe();
