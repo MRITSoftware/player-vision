@@ -45,6 +45,8 @@ const MAX_VIDEO_RETRIES = 3;
 let isLoadingVideo = false;
 let currentVideoToken = 0;
 let emptyPlaylistRetryTimer = null;
+let reconnectMonitorTimer = null;
+let lastKnownOnlineState = navigator.onLine;
 
 // ===== Variáveis de promoção =====
 let promoData = null;
@@ -2926,7 +2928,7 @@ function proximoItem() {
             currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
             // Se a playlist não mudou, continuar do início normalmente
             // Se mudou, atualizarPlaylist já ajustou o índice corretamente
-            if (!isPlaying) {
+            if (!isPlaying && !isLoadingVideo) {
               tocarLoop();
             }
           }
@@ -2935,7 +2937,9 @@ function proximoItem() {
           // Continuar mesmo se houver erro
           if (playlist.length > 0) {
             currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
-            tocarLoop();
+            if (!isPlaying && !isLoadingVideo) {
+              tocarLoop();
+            }
           }
         });
       } else {
@@ -3746,130 +3750,186 @@ if ('serviceWorker' in navigator) {
 
 // ===== UI Events / Heartbeat / Unlock =====
 
-// Debounce do evento online
-window.addEventListener("online", () => {
-  if (onlineDebounceId) clearTimeout(onlineDebounceId);
-  onlineDebounceId = setTimeout(async () => {
-    if (codigoAtual) {
-      try {
-        const deviceId = gerarDeviceId();
-        
-        // Buscar com device_id para verificar se é o mesmo dispositivo
-        let { data, error } = await client
-          .from("displays")
-          .select("is_locked,device_id")
-          .eq("codigo_unico", codigoAtual)
-          .maybeSingle();
-        
-        // Se não encontrou device_id, tentar sem ele (retrocompatibilidade)
-        if (error && error.message && error.message.includes('column') && error.message.includes('does not exist')) {
-          const { data: dataBasica } = await client
-            .from("displays")
-            .select("is_locked")
-            .eq("codigo_unico", codigoAtual)
-            .maybeSingle();
-          data = dataBasica;
-        }
+async function enviarPingOnlineImediato() {
+  if (!codigoAtual || !navigator.onLine) return;
+  const nowIso = new Date().toISOString();
+  try {
+    const updateData = {
+      status_tela: "Online",
+      last_ping: nowIso,
+      device_last_seen: nowIso
+    };
+    try {
+      updateData.device_id = gerarDeviceId();
+    } catch {}
 
-        if (data) {
-          const mesmoDispositivo = data.device_id && data.device_id === deviceId;
-          
-          // Se is_locked = false, significa que exibição foi parada - limpar tudo
-          if (data.is_locked === false) {
-            console.log("⏸️ Display desbloqueado ao voltar online (is_locked = false), parando exibição...");
-            
-            // Desativar dispositivo
-            await client
-              .from("dispositivos")
-              .update({ is_ativo: false })
-              .eq("device_id", deviceId);
-            
-            // Limpar localStorage
-            localStorage.removeItem(CODIGO_DISPLAY_KEY);
-            localStorage.removeItem(LOCAL_TELA_KEY);
-            
-            // Parar tudo e mostrar tela de login
-            await pararTudoMostrarLogin();
-            return;
-          }
-          
-          // Se está locked e é o mesmo dispositivo, garantir lock
-          if (mesmoDispositivo) {
-            const updateData = { 
-              is_locked: true, 
-              status: "Em uso",
-              device_id: deviceId,
-              device_last_seen: new Date().toISOString()
-            };
-            
-            try {
-              await client
-                .from("displays")
-                .update(updateData)
-                .eq("codigo_unico", codigoAtual);
-            } catch (updateErr) {
-              // Se campos não existirem, fazer update sem eles
-              if (updateErr.message && updateErr.message.includes('column') && updateErr.message.includes('does not exist')) {
-                await client
-                  .from("displays")
-                  .update({ is_locked: true, status: "Em uso" })
-                  .eq("codigo_unico", codigoAtual);
-              }
-            }
-          }
-        }
+    await client
+      .from("displays")
+      .update(updateData)
+      .eq("codigo_unico", codigoAtual);
+  } catch (err) {
+    if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
+      try {
+        await client
+          .from("displays")
+          .update({
+            status_tela: "Online",
+            last_ping: nowIso
+          })
+          .eq("codigo_unico", codigoAtual);
       } catch {}
     }
+  }
+}
 
-    if (!realtimeReady) {
-      iniciarRealtime();
-      realtimeReady = true;
+async function tratarRetornoOnline(origem = "online-event") {
+  if (!codigoAtual || !navigator.onLine) return;
+  console.log(`🌐 Conexão restabelecida (${origem}) - sincronizando imediatamente`);
+  await enviarPingOnlineImediato();
+
+  try {
+    const deviceId = gerarDeviceId();
+    
+    // Buscar com device_id para verificar se é o mesmo dispositivo
+    let { data, error } = await client
+      .from("displays")
+      .select("is_locked,device_id")
+      .eq("codigo_unico", codigoAtual)
+      .maybeSingle();
+    
+    // Se não encontrou device_id, tentar sem ele (retrocompatibilidade)
+    if (error && error.message && error.message.includes('column') && error.message.includes('does not exist')) {
+      const { data: dataBasica } = await client
+        .from("displays")
+        .select("is_locked")
+        .eq("codigo_unico", codigoAtual)
+        .maybeSingle();
+      data = dataBasica;
     }
 
-    if (isPlaying) {
-      pendingResync = true;
-    } else if (codigoAtual) {
-      await carregarConteudo(currentPlaylistId || codigoAtual);
-    }
-  }, 1200);
-});
-
-setInterval(async () => {
-  if (codigoAtual && navigator.onLine) {
-    try {
-      // Atualização básica (sempre funciona)
-      const updateData = { 
-        status_tela: "Online", 
-        last_ping: new Date().toISOString()
-      };
+    if (data) {
+      const mesmoDispositivo = data.device_id && data.device_id === deviceId;
       
-      // Tentar adicionar campos de dispositivo (opcional)
-      try {
-        const deviceId = gerarDeviceId();
-        updateData.device_id = deviceId;
-        updateData.device_last_seen = new Date().toISOString();
-      } catch {
-        // Ignorar se device_id não puder ser gerado
+      // Se is_locked = false, significa que exibição foi parada - limpar tudo
+      if (data.is_locked === false) {
+        console.log("⏸️ Display desbloqueado ao voltar online (is_locked = false), parando exibição...");
+        
+        // Desativar dispositivo
+        await client
+          .from("dispositivos")
+          .update({ is_ativo: false })
+          .eq("device_id", deviceId);
+        
+        // Limpar localStorage
+        localStorage.removeItem(CODIGO_DISPLAY_KEY);
+        localStorage.removeItem(LOCAL_TELA_KEY);
+        
+        // Parar tudo e mostrar tela de login
+        await pararTudoMostrarLogin();
+        return;
       }
       
-      await client
-        .from("displays")
-        .update(updateData)
-        .eq("codigo_unico", codigoAtual);
-    } catch (err) {
-      // Se erro for de coluna não encontrada, fazer update sem campos opcionais
-      if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
+      // Se está locked e é o mesmo dispositivo, garantir lock
+      if (mesmoDispositivo) {
+        const updateData = { 
+          is_locked: true, 
+          status: "Em uso",
+          device_id: deviceId,
+          device_last_seen: new Date().toISOString()
+        };
+        
         try {
           await client
             .from("displays")
-            .update({ 
-              status_tela: "Online", 
-              last_ping: new Date().toISOString()
-            })
+            .update(updateData)
             .eq("codigo_unico", codigoAtual);
-        } catch {}
+        } catch (updateErr) {
+          // Se campos não existirem, fazer update sem eles
+          if (updateErr.message && updateErr.message.includes('column') && updateErr.message.includes('does not exist')) {
+            await client
+              .from("displays")
+              .update({ is_locked: true, status: "Em uso" })
+              .eq("codigo_unico", codigoAtual);
+          }
+        }
       }
     }
+  } catch {}
+
+  if (!realtimeReady) {
+    iniciarRealtime();
+    realtimeReady = true;
+  }
+
+  if (isPlaying) {
+    pendingResync = true;
+  } else if (codigoAtual) {
+    await carregarConteudo(currentPlaylistId || codigoAtual);
+  }
+}
+
+async function checarConectividadeOffline() {
+  if (navigator.onLine) return true;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+  try {
+    // no-cors permite apenas validar conectividade de rede sem depender de CORS.
+    await fetch(`${supabaseUrl}/rest/v1/`, {
+      method: "GET",
+      mode: "no-cors",
+      cache: "no-store",
+      signal: controller.signal
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function iniciarMonitorReconexao() {
+  if (reconnectMonitorTimer) return;
+  reconnectMonitorTimer = setInterval(async () => {
+    const onlineAgora = navigator.onLine;
+    if (onlineAgora !== lastKnownOnlineState) {
+      lastKnownOnlineState = onlineAgora;
+      if (onlineAgora) {
+        if (onlineDebounceId) clearTimeout(onlineDebounceId);
+        onlineDebounceId = setTimeout(() => tratarRetornoOnline("monitor-transition"), 300);
+      }
+      return;
+    }
+
+    // Fallback: enquanto offline, testa periodicamente para detectar retorno rápido.
+    if (!onlineAgora && codigoAtual) {
+      const voltou = await checarConectividadeOffline();
+      if (voltou) {
+        lastKnownOnlineState = true;
+        if (onlineDebounceId) clearTimeout(onlineDebounceId);
+        onlineDebounceId = setTimeout(() => tratarRetornoOnline("offline-probe"), 300);
+      }
+    }
+  }, 3000);
+}
+
+// Debounce do evento online
+window.addEventListener("online", () => {
+  lastKnownOnlineState = true;
+  if (onlineDebounceId) clearTimeout(onlineDebounceId);
+  onlineDebounceId = setTimeout(() => tratarRetornoOnline("online-event"), 1200);
+});
+
+window.addEventListener("offline", () => {
+  lastKnownOnlineState = false;
+  console.log("📴 Conexão perdida - player seguirá com cache local e monitorando retorno");
+});
+
+iniciarMonitorReconexao();
+
+setInterval(async () => {
+  if (codigoAtual && navigator.onLine) {
+    await enviarPingOnlineImediato();
   }
 }, 5 * 60 * 1000);
 
