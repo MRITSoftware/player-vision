@@ -47,6 +47,17 @@ let currentVideoToken = 0;
 let emptyPlaylistRetryTimer = null;
 let reconnectMonitorTimer = null;
 let lastKnownOnlineState = navigator.onLine;
+let preloadNextState = {
+  index: -1,
+  url: null,
+  isVideo: false,
+  ready: false,
+  loading: false,
+  token: 0,
+  imageEl: null,
+  videoEl: null,
+  blobUrl: null
+};
 
 // ===== Variáveis de promoção =====
 let promoData = null;
@@ -1847,6 +1858,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     clearTimeout(emptyPlaylistRetryTimer);
     emptyPlaylistRetryTimer = null;
   }
+  clearPreloadNextState();
   
   // Se a playlist mudou, o Service Worker vai limpar apenas o que não está na nova playlist
   // Mantém automaticamente os vídeos/imagens que estão na nova playlist (cache inteligente)
@@ -2026,6 +2038,132 @@ async function resetAllCachesForNewCode() {
   if (codigoAtual) {
     await atualizarStatusCache(codigoAtual, false);
   }
+  clearPreloadNextState();
+}
+
+function isVideoMediaItem(item, itemUrl) {
+  const url = itemUrl || "";
+  const tipo = (item?.tipo || "").toLowerCase();
+  const isHls = /\.m3u8(\?|$)/i.test(url);
+  return isHls ||
+    tipo.includes("vídeo") ||
+    tipo.includes("video") ||
+    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
+}
+
+function clearPreloadNextState() {
+  preloadNextState.token++;
+  preloadNextState.index = -1;
+  preloadNextState.url = null;
+  preloadNextState.isVideo = false;
+  preloadNextState.ready = false;
+  preloadNextState.loading = false;
+  preloadNextState.imageEl = null;
+  if (preloadNextState.videoEl) {
+    try {
+      preloadNextState.videoEl.pause();
+      preloadNextState.videoEl.removeAttribute("src");
+      preloadNextState.videoEl.load();
+    } catch {}
+    preloadNextState.videoEl = null;
+  }
+  if (preloadNextState.blobUrl) {
+    try { URL.revokeObjectURL(preloadNextState.blobUrl); } catch {}
+    preloadNextState.blobUrl = null;
+  }
+}
+
+async function preloadNextItemBuffer(currentIdx) {
+  if (!playlist || playlist.length < 2) return;
+
+  const nextIndex = (currentIdx + 1) % playlist.length;
+  const nextItem = playlist[nextIndex];
+  if (!nextItem) return;
+
+  const nextUrl = pickSourceForOrientation(nextItem);
+  if (!nextUrl) return;
+
+  const nextIsVideo = isVideoMediaItem(nextItem, nextUrl);
+
+  if (
+    preloadNextState.ready &&
+    preloadNextState.index === nextIndex &&
+    preloadNextState.url === nextUrl &&
+    preloadNextState.isVideo === nextIsVideo
+  ) {
+    return;
+  }
+  if (
+    preloadNextState.loading &&
+    preloadNextState.index === nextIndex &&
+    preloadNextState.url === nextUrl &&
+    preloadNextState.isVideo === nextIsVideo
+  ) {
+    return;
+  }
+
+  clearPreloadNextState();
+  const myToken = ++preloadNextState.token;
+  preloadNextState.index = nextIndex;
+  preloadNextState.url = nextUrl;
+  preloadNextState.isVideo = nextIsVideo;
+  preloadNextState.loading = true;
+
+  try {
+    if (!nextIsVideo) {
+      const preloadImg = new Image();
+      preloadImg.decoding = "async";
+      await new Promise((resolve, reject) => {
+        preloadImg.onload = () => resolve();
+        preloadImg.onerror = reject;
+        preloadImg.src = nextUrl;
+      });
+      if (myToken !== preloadNextState.token) return;
+      preloadNextState.imageEl = preloadImg;
+      preloadNextState.ready = true;
+      return;
+    }
+
+    const preloadVideo = document.createElement("video");
+    preloadVideo.muted = true;
+    preloadVideo.playsInline = true;
+    preloadVideo.preload = "auto";
+    preloadVideo.setAttribute("crossorigin", "anonymous");
+
+    let preloadUrl = nextUrl;
+    if (!/\.m3u8(\?|$)/i.test(nextUrl)) {
+      const cacheKey = `${codigoAtual}::${nextUrl}`;
+      let cachedBlob = await idbGet(cacheKey);
+      if (!cachedBlob && navigator.onLine) {
+        try {
+          const resp = await fetch(nextUrl, { cache: "force-cache" });
+          if (resp.ok) {
+            cachedBlob = await resp.blob();
+            idbSet(cacheKey, cachedBlob).catch(() => {});
+          }
+        } catch {}
+      }
+      if (cachedBlob) {
+        preloadUrl = URL.createObjectURL(cachedBlob);
+        preloadNextState.blobUrl = preloadUrl;
+      }
+    }
+
+    preloadVideo.src = preloadUrl;
+    preloadVideo.load();
+    const ok = await waitForVideoReady(preloadVideo, 4000);
+    if (myToken !== preloadNextState.token) return;
+    if (!ok) return;
+
+    preloadNextState.videoEl = preloadVideo;
+    preloadNextState.ready = true;
+  } catch {
+    // Ignorar erros de preload: o fluxo normal segue funcionando.
+  } finally {
+    if (myToken === preloadNextState.token) {
+      preloadNextState.loading = false;
+    }
+  }
 }
 
 async function tocarLoop() {
@@ -2052,12 +2190,9 @@ async function tocarLoop() {
 
   const itemUrl = pickSourceForOrientation(item);
   currentItemUrl = itemUrl;
-
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
-  const isVideo = isHls ||
-    (item.tipo || "").toLowerCase().includes("vídeo") ||
-    (item.tipo || "").toLowerCase().includes("video") ||
-    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
+  const isVideo = isVideoMediaItem(item, itemUrl);
+  preloadNextItemBuffer(currentIndex).catch(() => {});
 
   // NÃO esconder o conteúdo atual ainda - vamos carregar o próximo primeiro
   // Isso evita a "piscada" entre conteúdos
@@ -2274,52 +2409,93 @@ async function tocarLoop() {
 
         // Verificar se o vídeo está no cache (tanto online quanto offline)
         try {
-          const cacheKey = `${codigoAtual}::${itemUrl}`;
-          const cachedBlob = await idbGet(cacheKey);
-          
-          if (cachedBlob) {
-            console.log("📦 Carregando vídeo do cache:", itemUrl, "tamanho:", (cachedBlob.size / 1024 / 1024).toFixed(2), "MB");
-            // Criar URL do blob para o vídeo
-            const blobUrl = URL.createObjectURL(cachedBlob);
-            video.src = blobUrl;
+          let loadedFromPreload = false;
+          const canUsePreloadedVideo =
+            preloadNextState.ready &&
+            preloadNextState.isVideo &&
+            preloadNextState.url === itemUrl &&
+            preloadNextState.videoEl;
+
+          if (canUsePreloadedVideo) {
+            const preloadSrc =
+              preloadNextState.videoEl.currentSrc ||
+              preloadNextState.videoEl.src ||
+              itemUrl;
+
+            video.src = preloadSrc;
             video.load();
-            
-            // Limpar URL do blob quando o vídeo terminar ou quando mudar de vídeo
-            const cleanupBlob = () => {
-              URL.revokeObjectURL(blobUrl);
-            };
-            video.addEventListener('ended', cleanupBlob, { once: true });
-            video.addEventListener('loadstart', () => {
-              // Se o vídeo mudar antes de terminar, limpar o blob anterior
-              if (video.src !== blobUrl) {
-                cleanupBlob();
-              }
-            }, { once: true });
-            
-            const ok = await waitForVideoReady(video, 8000);
-            if (myToken !== playToken || videoToken !== currentVideoToken) { 
-              cleanupBlob();
-              isLoadingVideo = false; 
-              clearTimeout(safetyTimeout); 
-              return; 
-            }
-            if (!ok || video.readyState < 3) {
-              console.error("Vídeo do cache não ficou pronto (readyState:", video.readyState, ")");
-              cleanupBlob();
-              isLoadingVideo = false; 
+            const okPre = await waitForVideoReady(video, 3000);
+
+            if (myToken !== playToken || videoToken !== currentVideoToken) {
+              isLoadingVideo = false;
               clearTimeout(safetyTimeout);
-              
-              // Limpar elementos se falhou
-              if (wasImage) {
-                img.style.display = "block";
-              } else if (wasVideo) {
-                video.style.display = "block";
-              }
-              
-              proximoItem(); 
               return;
             }
-          } else {
+
+            if (okPre && video.readyState >= 3) {
+              if (preloadNextState.blobUrl && preloadSrc === preloadNextState.blobUrl) {
+                const keepBlobUrl = preloadNextState.blobUrl;
+                preloadNextState.blobUrl = null; // transfere ownership para player principal
+                const cleanupBlob = () => {
+                  try { URL.revokeObjectURL(keepBlobUrl); } catch {}
+                };
+                video.addEventListener('ended', cleanupBlob, { once: true });
+                video.addEventListener('loadstart', () => {
+                  if (video.src !== keepBlobUrl) cleanupBlob();
+                }, { once: true });
+              }
+              clearPreloadNextState();
+              loadedFromPreload = true;
+            }
+          }
+
+          if (!loadedFromPreload) {
+            const cacheKey = `${codigoAtual}::${itemUrl}`;
+            const cachedBlob = await idbGet(cacheKey);
+            
+            if (cachedBlob) {
+              console.log("📦 Carregando vídeo do cache:", itemUrl, "tamanho:", (cachedBlob.size / 1024 / 1024).toFixed(2), "MB");
+              // Criar URL do blob para o vídeo
+              const blobUrl = URL.createObjectURL(cachedBlob);
+              video.src = blobUrl;
+              video.load();
+              
+              // Limpar URL do blob quando o vídeo terminar ou quando mudar de vídeo
+              const cleanupBlob = () => {
+                URL.revokeObjectURL(blobUrl);
+              };
+              video.addEventListener('ended', cleanupBlob, { once: true });
+              video.addEventListener('loadstart', () => {
+                // Se o vídeo mudar antes de terminar, limpar o blob anterior
+                if (video.src !== blobUrl) {
+                  cleanupBlob();
+                }
+              }, { once: true });
+              
+              const ok = await waitForVideoReady(video, 8000);
+              if (myToken !== playToken || videoToken !== currentVideoToken) { 
+                cleanupBlob();
+                isLoadingVideo = false; 
+                clearTimeout(safetyTimeout); 
+                return; 
+              }
+              if (!ok || video.readyState < 3) {
+                console.error("Vídeo do cache não ficou pronto (readyState:", video.readyState, ")");
+                cleanupBlob();
+                isLoadingVideo = false; 
+                clearTimeout(safetyTimeout);
+                
+                // Limpar elementos se falhou
+                if (wasImage) {
+                  img.style.display = "block";
+                } else if (wasVideo) {
+                  video.style.display = "block";
+                }
+                
+                proximoItem(); 
+                return;
+              }
+            } else {
             // Vídeo não está no cache - usar URL original
             if (!navigator.onLine) {
               console.warn("⚠️ Vídeo não encontrado no cache offline:", itemUrl);
@@ -2387,6 +2563,7 @@ async function tocarLoop() {
               proximoItem(); 
               return;
             }
+          }
           }
         } catch (error) {
           console.error("Erro ao carregar vídeo do cache:", error);
@@ -2477,6 +2654,12 @@ async function tocarLoop() {
     }
   } else {
     // ---- IMAGEM ----
+    const canUsePreloadedImage =
+      preloadNextState.ready &&
+      !preloadNextState.isVideo &&
+      preloadNextState.url === itemUrl &&
+      preloadNextState.imageEl;
+
     img.onload = () => {
       if (myToken !== playToken) return;
 
@@ -2528,7 +2711,12 @@ async function tocarLoop() {
       proximoItem();
     };
 
-    img.src = itemUrl;
+    if (canUsePreloadedImage) {
+      img.src = preloadNextState.imageEl.src || itemUrl;
+      clearPreloadNextState();
+    } else {
+      img.src = itemUrl;
+    }
   }
 }
 
@@ -3335,6 +3523,7 @@ async function pararTudoMostrarLogin() {
   currentIndex = 0;
   currentItemUrl = null;
   isPlaying = false;
+  clearPreloadNextState();
   
   // Limpar promoção
   fecharPopupPromocao();
