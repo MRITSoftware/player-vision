@@ -2919,6 +2919,9 @@ function proximoItem() {
         console.log("🔄 Recarregando playlist do banco...");
         // Preservar o índice atual para continuar do mesmo ponto após recarregar
         const indiceParaContinuar = currentIndex; // que será 0 (início do próximo ciclo)
+        // No fim de ciclo, NÃO devemos restaurar o item anterior (último do ciclo).
+        // Força a recarga a começar do índice calculado acima.
+        currentItemUrl = null;
         
         // Recarregar conteúdo do banco para pegar mudanças na playlist
         carregarConteudo(currentPlaylistId).then(() => {
