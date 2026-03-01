@@ -3095,50 +3095,32 @@ function proximoItem() {
   // Ao fim de cada ciclo, verificar se código mudou na tabela dispositivos
   if (cicloCompleto && navigator.onLine) {
     console.log("🔄 Ciclo completo finalizado, verificando código do dispositivo...");
-    
-    verificarCodigoDispositivoAoCiclo().then((mudou) => {
-      if (mudou) {
-        // Se mudou, carregarConteudo já foi chamado, não precisa continuar
-        return;
-      }
-      
-      // Se não mudou, continuar com verificação de playlist
-      if (currentPlaylistId) {
-        console.log("🔄 Recarregando playlist do banco...");
-        // Preservar o índice atual para continuar do mesmo ponto após recarregar
-        const indiceParaContinuar = currentIndex; // que será 0 (início do próximo ciclo)
-        // No fim de ciclo, NÃO devemos restaurar o item anterior (último do ciclo).
-        // Força a recarga a começar do índice calculado acima.
-        currentItemUrl = null;
-        
-        // Recarregar conteúdo do banco para pegar mudanças na playlist
-        carregarConteudo(currentPlaylistId).then(() => {
-          console.log("✅ Playlist recarregada, cache será atualizado se houver mudanças");
-          // Garantir que o índice esteja válido após recarregar
+
+    // Não bloquear a transição visual; sincronização roda em background.
+    const indiceParaContinuar = currentIndex; // início do próximo ciclo
+    const playlistIdParaSync = currentPlaylistId;
+
+    setTimeout(() => {
+      verificarCodigoDispositivoAoCiclo().then((mudou) => {
+        if (mudou) return; // carregarConteudo já executado
+        if (!playlistIdParaSync) return;
+
+        console.log("🔄 Recarregando playlist do banco (background)...");
+        carregarConteudo(playlistIdParaSync).then(() => {
           if (playlist.length > 0) {
             currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
-            // Se a playlist não mudou, continuar do início normalmente
-            // Se mudou, atualizarPlaylist já ajustou o índice corretamente
             if (!isPlaying && !isLoadingVideo) {
               tocarLoop();
             }
           }
         }).catch(err => {
-          console.error("❌ Erro ao recarregar playlist:", err);
-          // Continuar mesmo se houver erro
-          if (playlist.length > 0) {
-            currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
-            if (!isPlaying && !isLoadingVideo) {
-              tocarLoop();
-            }
-          }
+          console.error("❌ Erro ao recarregar playlist em background:", err);
         });
-      } else {
-        // Conteúdo único, apenas continuar
-        tocarLoop();
-      }
-    });
-    return; // Não chamar tocarLoop aqui, será chamado dentro do then
+      }).catch(() => {});
+    }, 0);
+
+    tocarLoop();
+    return;
   }
   
   tocarLoop();
