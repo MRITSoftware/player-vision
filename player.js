@@ -1689,6 +1689,7 @@ async function carregarConteudo(codigoConteudo) {
       video.load();
       video.style.display = "none";
       video.classList.remove("hidden-ready");
+      clearTransitionSnapshotUrl();
       img.src = "";
       img.style.display = "none";
       img.classList.remove("hidden-ready");
@@ -2001,6 +2002,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     video.classList.remove("hidden-ready");
     img.style.display = "none";
     img.classList.remove("hidden-ready");
+    clearTransitionSnapshotUrl();
     img.src = "";
     currentItemUrl = null;
     currentIndex = 0;
@@ -2084,6 +2086,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   video.classList.remove("hidden-ready");
   img.style.display = "none";
   img.classList.remove("hidden-ready");
+  clearTransitionSnapshotUrl();
   img.src = "";
   currentItemUrl = null;
   
@@ -2150,6 +2153,7 @@ async function resetAllCachesForNewCode() {
   video.load();
   video.style.display = "none";
   video.classList.remove("hidden-ready");
+  clearTransitionSnapshotUrl();
   img.src = "";
   img.style.display = "none";
   img.classList.remove("hidden-ready");
@@ -2311,6 +2315,71 @@ async function warmUpcomingVideoCache(currentIdx, lookahead = 2) {
   }
 }
 
+let transitionSnapshotCanvas = null;
+let transitionSnapshotCtx = null;
+let transitionSnapshotUrl = null;
+
+function clearTransitionSnapshotUrl() {
+  if (transitionSnapshotUrl) {
+    try { URL.revokeObjectURL(transitionSnapshotUrl); } catch {}
+    transitionSnapshotUrl = null;
+  }
+}
+
+async function captureTransitionSnapshotAsync() {
+  try {
+    const sourceW = video.videoWidth || video.clientWidth || 0;
+    const sourceH = video.videoHeight || video.clientHeight || 0;
+    if (!sourceW || !sourceH) return false;
+
+    const MAX_SNAPSHOT_WIDTH = 640;
+    const scale = sourceW > MAX_SNAPSHOT_WIDTH ? (MAX_SNAPSHOT_WIDTH / sourceW) : 1;
+    const targetW = Math.max(1, Math.round(sourceW * scale));
+    const targetH = Math.max(1, Math.round(sourceH * scale));
+
+    if (!transitionSnapshotCanvas) {
+      transitionSnapshotCanvas = document.createElement("canvas");
+      transitionSnapshotCtx = transitionSnapshotCanvas.getContext("2d");
+    }
+    if (!transitionSnapshotCtx) return false;
+
+    transitionSnapshotCanvas.width = targetW;
+    transitionSnapshotCanvas.height = targetH;
+    transitionSnapshotCtx.drawImage(video, 0, 0, targetW, targetH);
+
+    if (!transitionSnapshotCanvas.toBlob) {
+      img.src = transitionSnapshotCanvas.toDataURL("image/jpeg", 0.6);
+      img.style.display = "block";
+      return true;
+    }
+
+    const blob = await new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(null);
+      }, 150);
+      transitionSnapshotCanvas.toBlob((b) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(b || null);
+      }, "image/jpeg", 0.6);
+    });
+
+    if (!blob) return false;
+    clearTransitionSnapshotUrl();
+    transitionSnapshotUrl = URL.createObjectURL(blob);
+    img.src = transitionSnapshotUrl;
+    img.style.display = "block";
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Não foi possível capturar frame para transição:", err);
+    return false;
+  }
+}
+
 async function tocarLoop() {
   if (!playlist.length) {
     video.style.display = "none";
@@ -2361,23 +2430,7 @@ async function tocarLoop() {
       preloadNextState.videoEl.readyState >= 3
     )
   ) {
-    try {
-      const sourceW = video.videoWidth || video.clientWidth || 0;
-      const sourceH = video.videoHeight || video.clientHeight || 0;
-      const MAX_SNAPSHOT_WIDTH = 640;
-      const scale = sourceW > MAX_SNAPSHOT_WIDTH ? (MAX_SNAPSHOT_WIDTH / sourceW) : 1;
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(sourceW * scale));
-      canvas.height = Math.max(1, Math.round(sourceH * scale));
-      const ctx = canvas.getContext('2d');
-      if (!ctx || !sourceW || !sourceH) { throw new Error('snapshot-unavailable'); }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      img.src = canvas.toDataURL('image/jpeg', 0.6);
-      img.style.display = 'block';
-      // mostramos imediatamente o snapshot; não o escondemos com hidden-ready
-    } catch (err) {
-      console.warn('⚠️ Não foi possível capturar frame para transição:', err);
-    }
+    await captureTransitionSnapshotAsync();
   }
 
   const myToken = ++playToken;
@@ -2447,6 +2500,7 @@ async function tocarLoop() {
           if (wasImage || wasVideo) {
             img.style.display = "none";
             img.classList.remove("hidden-ready");
+            clearTransitionSnapshotUrl();
             img.src = "";
           }
           
@@ -2488,6 +2542,7 @@ async function tocarLoop() {
             if (wasImage || wasVideo) {
               img.style.display = "none";
               img.classList.remove("hidden-ready");
+              clearTransitionSnapshotUrl();
               img.src = "";
             }
             
@@ -2547,6 +2602,7 @@ async function tocarLoop() {
           if (wasImage || wasVideo) {
             img.style.display = "none";
             img.classList.remove("hidden-ready");
+            clearTransitionSnapshotUrl();
             img.src = "";
           }
           
@@ -2685,6 +2741,7 @@ async function tocarLoop() {
                     if (wasImage || wasVideo) {
                       img.style.display = "none";
                       img.classList.remove("hidden-ready");
+                      clearTransitionSnapshotUrl();
                       img.src = "";
                     }
                     
@@ -2752,6 +2809,7 @@ async function tocarLoop() {
         if (wasImage || wasVideo) {
           img.style.display = "none";
           img.classList.remove("hidden-ready");
+          clearTransitionSnapshotUrl();
           img.src = "";
         }
         
@@ -2865,9 +2923,11 @@ async function tocarLoop() {
     };
 
     if (canUsePreloadedImage) {
+      clearTransitionSnapshotUrl();
       img.src = preloadNextState.imageEl.src || itemUrl;
       clearPreloadNextState();
     } else {
+      clearTransitionSnapshotUrl();
       img.src = itemUrl;
     }
   }
@@ -3638,6 +3698,7 @@ async function pararTudoMostrarLogin() {
   
   // Esconder imagem
   if (img) {
+    clearTransitionSnapshotUrl();
     img.src = "";
     img.style.display = "none";
     if (img.timeoutId) {
