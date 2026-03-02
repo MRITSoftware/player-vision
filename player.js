@@ -20,8 +20,8 @@ const POLLING_MS = 1000; // 1 segundo para resposta instantânea
 // - "progressive": Espera buffer mínimo antes de tocar (recomendado - melhor equilíbrio)
 // - "full": Espera carregar 100% antes de tocar (mais seguro, mas mais lento)
 // - "immediate": Toca assim que possível (mais rápido, pode travar em conexões lentas)
-const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
-const MIN_BUFFER_SECONDS = 5; // Segundos mínimos de buffer para modo "progressive"
+const BUFFERING_MODE = "immediate"; // ou "full" ou "progressive"
+const MIN_BUFFER_SECONDS = 1; // usado apenas no modo "progressive"
 
 let playlist = [];
 let currentIndex = 0;
@@ -2338,7 +2338,6 @@ async function tocarLoop() {
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
   const isVideo = isVideoMediaItem(item, itemUrl);
   preloadNextItemBuffer(currentIndex).catch(() => {});
-  warmUpcomingVideoCache(currentIndex, 2).catch(() => {});
 
   // NÃO esconder o conteúdo atual ainda - vamos carregar o próximo primeiro
   // Isso evita a "piscada" entre conteúdos
