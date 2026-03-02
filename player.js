@@ -583,6 +583,56 @@ function pickSourceForOrientation(item) {
   return item.url;
 }
 
+async function retomarCacheInstantaneo(codigo) {
+  try {
+    if (!codigo) return false;
+    const raw = localStorage.getItem(cacheKeyFor(codigo));
+    if (!raw) return false;
+
+    const data = JSON.parse(raw);
+    if (!data?.playlist || !Array.isArray(data.playlist) || data.playlist.length === 0) {
+      return false;
+    }
+
+    codigoAtual = codigo;
+    playlist = data.playlist;
+    currentPlaylistId = data.codigo || null;
+    currentContentCode = data.contentCode || data.codigo || codigo;
+    currentIndex = 0;
+    currentItemUrl = null;
+    isPlaying = false;
+    isLoadingVideo = false;
+    clearPreloadNextState();
+
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        action: "setNamespace",
+        namespace: codigo
+      });
+    }
+
+    const inputDiv = document.getElementById("codigoInput");
+    const rodape = document.getElementById("rodape");
+    const logo = document.getElementById("logo");
+    if (inputDiv) inputDiv.style.display = "none";
+    if (rodape) rodape.style.display = "none";
+    if (logo) logo.style.display = "none";
+
+    if (currentPlaylistId) {
+      subscribePlaylistChannel(currentPlaylistId);
+    } else {
+      subscribePlaylistChannel(null);
+    }
+
+    tocarLoop();
+    console.log("⚡ Retomada instantânea via cache local");
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Falha na retomada instantânea via cache:", err);
+    return false;
+  }
+}
+
 // ===== Player =====
 function startPlayer() {
   iniciar();
@@ -1013,6 +1063,7 @@ async function verificarCodigoSalvo() {
               }, 600);
               
               // Iniciar automaticamente (após garantir que elementos estão escondidos)
+              retomarCacheInstantaneo(codigoSalvo.trim().toUpperCase()).catch(() => {});
               setTimeout(() => {
                 startPlayer();
               }, 500);
@@ -1063,6 +1114,7 @@ async function verificarCodigoSalvo() {
       } else {
         // Offline: usar código salvo mesmo sem verificação
         console.log("📴 Modo offline, usando código salvo");
+        retomarCacheInstantaneo(codigoSalvo.trim().toUpperCase()).catch(() => {});
         setTimeout(() => {
           startPlayer();
         }, 1000);
@@ -1432,8 +1484,11 @@ async function iniciar() {
     }
   }
 
-  // Reset agressivo ao trocar de código (garante que nada da sessão anterior vaze)
-  await resetAllCachesForNewCode();
+  // Reset agressivo apenas quando realmente troca de código.
+  // Em reinício com mesmo código, manter cache para retomada instantânea.
+  if (codigoAnterior && codigoAnterior !== codigo) {
+    await resetAllCachesForNewCode();
+  }
 
   if (!navigator.onLine) {
     const cache = localStorage.getItem(cacheKeyFor(codigo));
@@ -2231,6 +2286,31 @@ async function preloadNextItemBuffer(currentIdx) {
   }
 }
 
+async function warmUpcomingVideoCache(currentIdx, lookahead = 2) {
+  if (!navigator.onLine || !playlist || playlist.length < 2) return;
+  try {
+    for (let step = 1; step <= lookahead; step++) {
+      const idx = (currentIdx + step) % playlist.length;
+      const it = playlist[idx];
+      if (!it) continue;
+      const url = pickSourceForOrientation(it);
+      if (!url) continue;
+      if (!isVideoMediaItem(it, url) || /\.m3u8(\?|$)/i.test(url)) continue;
+
+      const key = `${codigoAtual}::${url}`;
+      const exists = await idbGet(key);
+      if (exists) continue;
+
+      const resp = await fetch(url, { cache: "force-cache" });
+      if (!resp.ok) continue;
+      const blob = await resp.blob();
+      await idbSet(key, blob);
+    }
+  } catch {
+    // best-effort
+  }
+}
+
 async function tocarLoop() {
   if (!playlist.length) {
     video.style.display = "none";
@@ -2258,6 +2338,7 @@ async function tocarLoop() {
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
   const isVideo = isVideoMediaItem(item, itemUrl);
   preloadNextItemBuffer(currentIndex).catch(() => {});
+  warmUpcomingVideoCache(currentIndex, 2).catch(() => {});
 
   // NÃO esconder o conteúdo atual ainda - vamos carregar o próximo primeiro
   // Isso evita a "piscada" entre conteúdos
@@ -2302,7 +2383,7 @@ async function tocarLoop() {
 
     // Timeout adaptativo baseado na velocidade de rede detectada
     // Usar timeout maior se internet lenta foi detectada anteriormente
-    const safetyTimeoutMs = networkSpeed === 'slow' ? 45000 : networkSpeed === 'fast' ? 10000 : 15000;
+    const safetyTimeoutMs = networkSpeed === 'slow' ? 20000 : networkSpeed === 'fast' ? 7000 : 9000;
     const safetyTimeout = setTimeout(() => {
       if (isLoadingVideo) {
         console.warn("⚠️ Timeout de segurança no carregamento de vídeo (", safetyTimeoutMs, "ms, velocidade:", networkSpeed, ")");
