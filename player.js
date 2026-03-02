@@ -2349,14 +2349,30 @@ async function tocarLoop() {
   // "tela preta" antes de o novo vídeo carregar. para evitar isso, capturamos
   // um snapshot do frame atual e exibimos no <img> auxiliar até o próximo
   // vídeo estar pronto.
-  if (wasVideo && !wasImage) {
+  if (
+    wasVideo &&
+    !wasImage &&
+    !(
+      isVideo &&
+      preloadNextState.ready &&
+      preloadNextState.isVideo &&
+      preloadNextState.url === itemUrl &&
+      preloadNextState.videoEl &&
+      preloadNextState.videoEl.readyState >= 3
+    )
+  ) {
     try {
+      const sourceW = video.videoWidth || video.clientWidth || 0;
+      const sourceH = video.videoHeight || video.clientHeight || 0;
+      const MAX_SNAPSHOT_WIDTH = 640;
+      const scale = sourceW > MAX_SNAPSHOT_WIDTH ? (MAX_SNAPSHOT_WIDTH / sourceW) : 1;
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || video.clientWidth;
-      canvas.height = video.videoHeight || video.clientHeight;
+      canvas.width = Math.max(1, Math.round(sourceW * scale));
+      canvas.height = Math.max(1, Math.round(sourceH * scale));
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      img.src = canvas.toDataURL('image/png');
+      if (!ctx || !sourceW || !sourceH) { throw new Error('snapshot-unavailable'); }
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      img.src = canvas.toDataURL('image/jpeg', 0.6);
       img.style.display = 'block';
       // mostramos imediatamente o snapshot; não o escondemos com hidden-ready
     } catch (err) {
