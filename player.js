@@ -389,6 +389,32 @@ async function idbAllKeys() {
   });
 }
 
+async function limparIdbNaoUsadoDaPlaylist(playlistData) {
+  if (!codigoAtual) return;
+  try {
+    const keepUrls = new Set();
+    for (const item of (playlistData || [])) {
+      if (!item) continue;
+      if (item.url) keepUrls.add(item.url);
+      if (item.urlPortrait) keepUrls.add(item.urlPortrait);
+      if (item.urlLandscape) keepUrls.add(item.urlLandscape);
+    }
+
+    const keys = await idbAllKeys();
+    const prefix = `${codigoAtual}::`;
+    for (const key of keys) {
+      const ks = String(key);
+      if (!ks.startsWith(prefix)) continue;
+      const url = ks.slice(prefix.length);
+      if (!keepUrls.has(url)) {
+        await idbDel(ks);
+      }
+    }
+  } catch (err) {
+    console.warn("⚠️ Falha ao limpar IDB fora da playlist atual:", err);
+  }
+}
+
 // ===== Cache helpers (namespaced por código) =====
 function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
@@ -1630,6 +1656,19 @@ async function carregarConteudo(codigoConteudo) {
       try {
         const data = JSON.parse(cacheSalvo);
         if (data.playlist && Array.isArray(data.playlist) && data.playlist.length > 0) {
+          const cachedPlaylistId = data.codigo || null;
+          const cachedContentCode = data.contentCode || null;
+          const cacheCompativel =
+            (cachedContentCode && cachedContentCode === codigoConteudo) ||
+            (!cachedContentCode && (cachedPlaylistId === codigoConteudo || (codigoConteudo === codigoAtual && cachedPlaylistId === codigoAtual)));
+
+          if (!cacheCompativel) {
+            console.log("ℹ️ Cache ignorado por não corresponder ao conteúdo solicitado:", {
+              solicitado: codigoConteudo,
+              cacheCodigo: cachedPlaylistId,
+              cacheContentCode: cachedContentCode
+            });
+          } else {
           console.log("📦 Cache encontrado! Carregando playlist do cache:", data.playlist.length, "itens");
           
           // Configurar namespace no Service Worker para usar o cache correto
@@ -1641,7 +1680,6 @@ async function carregarConteudo(codigoConteudo) {
           }
           
           // Carregar playlist do cache imediatamente
-          const cachedPlaylistId = data.codigo || null;
           playlist = data.playlist;
           currentPlaylistId = cachedPlaylistId;
           currentContentCode = codigoConteudo;
@@ -1674,6 +1712,7 @@ async function carregarConteudo(codigoConteudo) {
           }
           
           return; // Retornar aqui - já carregou do cache
+          }
         }
       } catch (err) {
         console.warn("⚠️ Erro ao carregar cache salvo, buscando do banco:", err);
@@ -1894,6 +1933,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   }
   
   await salvarCache(playlist, (playlistId ?? codigoAtual));
+  await limparIdbNaoUsadoDaPlaylist(playlist);
 
   if (!playlist.length) {
     try { video.pause(); } catch {}
@@ -2019,7 +2059,11 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 
 async function salvarCache(playlistData, codigo) {
   // cache namespaced por código
-  localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
+  localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({
+    playlist: playlistData,
+    codigo,
+    contentCode: currentContentCode || null
+  }));
 
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
     console.log("📤 Enviando playlist para Service Worker:", playlistData.length, "itens");
