@@ -2566,18 +2566,10 @@ async function tocarLoop() {
               preloadNextState.videoEl.currentSrc ||
               preloadNextState.videoEl.src ||
               itemUrl;
-
-            video.src = preloadSrc;
-            video.load();
-            const okPre = await waitForVideoReady(video, 3000);
-
-            if (myToken !== playToken || videoToken !== currentVideoToken) {
-              isLoadingVideo = false;
-              clearTimeout(safetyTimeout);
-              return;
-            }
-
-            if (okPre && video.readyState >= 3) {
+            const preloadReady = preloadNextState.videoEl.readyState >= 3;
+            if (preloadReady) {
+              // Fast-path real: sem espera/await para trocar imediatamente.
+              video.src = preloadSrc;
               if (preloadNextState.blobUrl && preloadSrc === preloadNextState.blobUrl) {
                 const keepBlobUrl = preloadNextState.blobUrl;
                 preloadNextState.blobUrl = null; // transfere ownership para player principal
