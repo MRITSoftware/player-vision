@@ -2502,9 +2502,61 @@ async function tocarLoop() {
       proximoItem();
     };
   } else {
-    // ...existing code...
-    // IMAGEM: manter lógica original
-    // ...existing code...
+    const canUsePreloadedImage =
+      preloadNextState.ready &&
+      !preloadNextState.isVideo &&
+      preloadNextState.url === itemUrl &&
+      preloadNextState.imageEl;
+
+    img.onload = () => {
+      if (myToken !== playToken) return;
+
+      const fit = item.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
+      const focus = item.focus || "center center";
+      applyFit(img, fit, focus);
+
+      if (wasVideo) {
+        try {
+          activeVideo.pause();
+          activeVideo.currentTime = 0;
+          activeVideo.removeAttribute("src");
+          activeVideo.load();
+        } catch {}
+      }
+
+      activeVideo.style.display = "none";
+      activeVideo.classList.remove("hidden-ready");
+      img.style.display = "block";
+      img.classList.remove("hidden-ready");
+      img.style.opacity = "1";
+      isPlaying = true;
+
+      if (typeof duration === "number" && duration > 0) {
+        img.timeoutId = setTimeout(async () => {
+          isPlaying = false;
+          const mudou = await verificarCodigoDispositivoAoCiclo();
+          if (mudou) return;
+          if (pendingResync) {
+            pendingResync = false;
+            await carregarConteudo(currentPlaylistId || codigoAtual);
+          }
+          proximoItem();
+        }, duration);
+      }
+    };
+
+    img.onerror = () => {
+      isPlaying = false;
+      proximoItem();
+    };
+
+    clearTransitionSnapshotUrl();
+    if (canUsePreloadedImage) {
+      img.src = preloadNextState.imageEl.src || itemUrl;
+      clearPreloadNextState();
+    } else {
+      img.src = itemUrl;
+    }
   }
 }
 
@@ -3716,15 +3768,17 @@ async function verificarMudancaDispositivo() {
 
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
-  // Parar e esconder vídeo
-  if (video) {
-    try { 
-      video.pause(); 
-      video.currentTime = 0;
-      video.removeAttribute("src");
-      video.load();
+  // Parar e esconder todos os vídeos (A/B)
+  for (const v of videoEls) {
+    if (!v) continue;
+    try {
+      v.pause();
+      v.currentTime = 0;
+      v.removeAttribute("src");
+      v.load();
     } catch {}
-    video.style.display = "none";
+    v.style.display = "none";
+    v.classList.remove("hidden-ready");
   }
   
   // Destruir HLS
@@ -3772,7 +3826,6 @@ async function pararTudoMostrarLogin() {
 // ===== Função para verificar se o player está ativo (não está na tela de login) =====
 function isPlayerAtivo() {
   const codigoInput = document.getElementById("codigoInput");
-  const video = document.getElementById("videoPlayer");
   const img = document.getElementById("imgPlayer");
   
   // Se o campo de código está visível, o player NÃO está ativo
@@ -3784,7 +3837,10 @@ function isPlayerAtivo() {
   }
   
   // Se vídeo ou imagem estão visíveis, o player está ativo
-  if (video && video.style.display !== 'none') {
+  if (videoEls[0] && videoEls[0].style.display !== 'none') {
+    return true;
+  }
+  if (videoEls[1] && videoEls[1].style.display !== 'none') {
     return true;
   }
   if (img && img.style.display !== 'none') {
@@ -3954,14 +4010,14 @@ function mostrarLogin() {
     }
   }
   
-  // Garantir que vídeo e imagem estejam escondidos e com z-index baixo
-  const video = document.getElementById("videoPlayer");
+  // Garantir que vídeos A/B e imagem estejam escondidos e com z-index baixo
   const img = document.getElementById("imgPlayer");
-  if (video) {
-    video.style.display = "none";
-    video.style.zIndex = "-1";
-    video.style.opacity = "0";
-    try { video.pause(); } catch {}
+  for (const v of videoEls) {
+    if (!v) continue;
+    v.style.display = "none";
+    v.style.zIndex = "-1";
+    v.style.opacity = "0";
+    try { v.pause(); } catch {}
   }
   if (img) {
     img.style.display = "none";
