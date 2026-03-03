@@ -48,6 +48,8 @@ let currentVideoToken = 0;
 let cycleCheckInFlight = false;
 let preloadedBufferUrl = null;
 let preloadingBuffer = false;
+let lastFailedUrl = null;
+let lastFailedRetries = 0;
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
@@ -2103,7 +2105,7 @@ async function tocarLoop() {
         if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
           nextVideo.src = itemUrl;
           nextVideo.load();
-          const ok = await waitForVideoReady(nextVideo, 3000);
+          const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls nativo nao pronto");
         } else if (window.Hls && window.Hls.isSupported()) {
           hls = new Hls({ maxBufferLength: 20, maxMaxBufferLength: 40 });
@@ -2132,14 +2134,14 @@ async function tocarLoop() {
         } else {
           nextVideo.src = itemUrl;
           nextVideo.load();
-          const ok = await waitForVideoReady(nextVideo, 3000);
+          const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
         nextVideo.src = itemUrl;
         nextVideo.load();
-        const ok = await waitForVideoReady(nextVideo, 3000);
-        if (!ok || nextVideo.readyState < 2) throw new Error("video nao pronto");
+        const ok = await waitForVideoReady(nextVideo, 6000);
+        if (!ok || nextVideo.readyState < 3) throw new Error("video nao pronto");
       }
 
       if (myToken !== playToken || videoToken !== currentVideoToken) {
@@ -2171,12 +2173,29 @@ async function tocarLoop() {
 
       isPlaying = true;
       videoRetryCount = 0;
+      lastFailedUrl = null;
+      lastFailedRetries = 0;
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
 
       nextVideo.play().catch(() => {
         nextVideo.muted = true;
-        nextVideo.play().catch(() => proximoItem());
+        nextVideo.play().catch(() => {
+          if (lastFailedUrl === itemUrl) {
+            lastFailedRetries += 1;
+          } else {
+            lastFailedUrl = itemUrl;
+            lastFailedRetries = 1;
+          }
+
+          if (lastFailedRetries > 1) {
+            lastFailedUrl = null;
+            lastFailedRetries = 0;
+            proximoItem();
+            return;
+          }
+          setTimeout(() => tocarLoop(), 120);
+        });
       });
 
       video = nextVideo;
@@ -2194,6 +2213,21 @@ async function tocarLoop() {
     } catch (e) {
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
+      if (lastFailedUrl === itemUrl) {
+        lastFailedRetries += 1;
+      } else {
+        lastFailedUrl = itemUrl;
+        lastFailedRetries = 1;
+      }
+
+      if (lastFailedRetries > 1) {
+        lastFailedUrl = null;
+        lastFailedRetries = 0;
+        videoRetryCount = 0;
+        isPlaying = false;
+        proximoItem();
+        return;
+      }
       if (videoRetryCount < MAX_VIDEO_RETRIES) {
         videoRetryCount++;
         setTimeout(() => tocarLoop(), 150);
