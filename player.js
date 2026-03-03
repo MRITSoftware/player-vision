@@ -658,7 +658,6 @@ function startPlayer() {
 // ...existing code...
 // Expor função global para o botão Iniciar (garantido ao final do arquivo)
 window.startPlayer = startPlayer;
-}
 
 // ===== Função para verificar código salvo =====
 async function verificarCodigoSalvo() {
