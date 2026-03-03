@@ -76,7 +76,6 @@ const img = document.getElementById("imgPlayer");
 
 function getActiveVideo() {
   return videoEls[activeVideoIdx];
-}
 function getInactiveVideo() {
   return videoEls[1 - activeVideoIdx];
 }
@@ -655,9 +654,6 @@ async function retomarCacheInstantaneo(codigo) {
 function startPlayer() {
   iniciar();
 }
-// ...existing code...
-// Expor função global para o botão Iniciar (garantido ao final do arquivo)
-window.startPlayer = startPlayer;
 
 // ===== Função para verificar código salvo =====
 async function verificarCodigoSalvo() {
@@ -2881,7 +2877,6 @@ async function tocarLoop() {
         
         isPlaying = true;
         videoRetryCount = 0;
->>>>>>> 1181ccf (feat: alternância instantânea entre dois elementos <video> para transição sem tela preta)
         isLoadingVideo = false;
         clearTimeout(safetyTimeout);
         proximoItem();
