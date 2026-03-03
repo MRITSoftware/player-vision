@@ -548,6 +548,9 @@ function startPlayer() {
   iniciar();
 }
 
+// Garantir acesso global para handlers no index.html
+window.startPlayer = startPlayer;
+
 // ===== Função para verificar código salvo =====
 async function verificarCodigoSalvo() {
   try {
