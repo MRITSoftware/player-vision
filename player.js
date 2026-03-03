@@ -20,9 +20,9 @@ const POLLING_MS = 1000; // 1 segundo para resposta instantânea
 // - "progressive": Espera buffer mínimo antes de tocar (recomendado - melhor equilíbrio)
 // - "full": Espera carregar 100% antes de tocar (mais seguro, mas mais lento)
 // - "immediate": Toca assim que possível (mais rápido, pode travar em conexões lentas)
-// Por padrão mudar para "progressive" para reduzir travamentos/piscadas em transições
+// Por padrão usar "progressive" para reduzir travamentos/piscadas em transições
 const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
-// Aumentar buffer mínimo para dar mais margem durante trocas em conexões instáveis
+// Buffer mínimo maior para dar mais margem durante trocas em conexões instáveis
 const MIN_BUFFER_SECONDS = 3; // usado apenas no modo "progressive"
 
 let playlist = [];
@@ -66,37 +66,23 @@ let promoData = null;
 let promoCounter = null;
 let promoPopup = null;
 
-const videoA = document.getElementById("videoPlayer");
-const videoB = document.getElementById("videoPlayerB");
+// Dual video elements for instant transitions
+const videoEls = [
+  document.getElementById("videoPlayerA"),
+  document.getElementById("videoPlayerB")
+];
+let activeVideoIdx = 0;
 const img = document.getElementById("imgPlayer");
 
-// Controle de buffer A/B
-let activeVideo = videoA;
-let inactiveVideo = videoB;
-
-function swapVideos() {
-  // Alterna qual é o ativo/inativo
-  const temp = activeVideo;
-  activeVideo = inactiveVideo;
-  inactiveVideo = temp;
+function getActiveVideo() {
+  return videoEls[activeVideoIdx];
 }
-
-function showActiveVideo() {
-  activeVideo.style.display = "block";
-  activeVideo.style.opacity = "1";
-  activeVideo.classList.remove("hidden-ready");
-  inactiveVideo.style.display = "none";
-  inactiveVideo.style.opacity = "0";
-  inactiveVideo.classList.add("hidden-ready");
+function getInactiveVideo() {
+  return videoEls[1 - activeVideoIdx];
 }
-
-function hideAllVideos() {
-  videoA.style.display = "none";
-  videoA.style.opacity = "0";
-  videoA.classList.add("hidden-ready");
-  videoB.style.display = "none";
-  videoB.style.opacity = "0";
-  videoB.classList.add("hidden-ready");
+function swapActiveVideo() {
+  activeVideoIdx = 1 - activeVideoIdx;
+}
 }
 
 // ===== Constantes para localStorage =====
@@ -2307,8 +2293,7 @@ async function preloadNextItemBuffer(currentIdx) {
 
     preloadVideo.src = preloadUrl;
     preloadVideo.load();
-    // Dar mais tempo para o preload em background (reduz cortes ao trocar)
-    const ok = await waitForVideoReady(preloadVideo, 8000);
+  const ok = await waitForVideoReady(preloadVideo, 8000);
     if (myToken !== preloadNextState.token) return;
     if (!ok) return;
 
@@ -2416,7 +2401,8 @@ async function captureTransitionSnapshotAsync() {
 async function tocarLoop() {
   // Duplo buffer A/B
   if (!playlist.length) {
-    hideAllVideos();
+  videoEls[0].style.display = "none";
+  videoEls[1].style.display = "none";
     img.style.display = "none";
     isPlaying = false;
     isLoadingVideo = false;
@@ -2428,8 +2414,8 @@ async function tocarLoop() {
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
-  activeVideo.onended = null;
-  inactiveVideo.onended = null;
+  videoEls[0].onended = null;
+  videoEls[1].onended = null;
   img.onload = null;
   img.onerror = null;
 
@@ -2443,26 +2429,11 @@ async function tocarLoop() {
   const isVideo = isVideoMediaItem(item, itemUrl);
   preloadNextItemBuffer(currentIndex).catch(() => {});
 
-  // NÃO esconder o conteúdo atual ainda - vamos carregar o próximo primeiro
-  // Isso evita a "piscada" entre conteúdos
+  // Alternância entre vídeos
+  const activeVideo = getActiveVideo();
+  const inactiveVideo = getInactiveVideo();
   const wasVideo = activeVideo.style.display === "block";
   const wasImage = img.style.display === "block";
-
-  // se estamos trocando de um vídeo para outro, o elemento "video" vai perder o frame atual assim que alterarmos o src
-  if (
-    wasVideo &&
-    !wasImage &&
-    !(
-      isVideo &&
-      preloadNextState.ready &&
-      preloadNextState.isVideo &&
-      preloadNextState.url === itemUrl &&
-      preloadNextState.videoEl &&
-      preloadNextState.videoEl.readyState >= 3
-    )
-  ) {
-    await captureTransitionSnapshotAsync();
-  }
 
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
@@ -2476,6 +2447,68 @@ async function tocarLoop() {
     currentVideoToken++;
     const videoToken = currentVideoToken;
 
+    // Carregar vídeo no elemento inativo
+    inactiveVideo.setAttribute("crossorigin", "anonymous");
+    inactiveVideo.preload = "auto";
+    inactiveVideo.src = itemUrl;
+    inactiveVideo.load();
+
+    // Esperar até o vídeo estar pronto para exibir
+    const ok = await waitForVideoReady(inactiveVideo, 8000);
+    if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; return; }
+    if (!ok || inactiveVideo.readyState < 3) {
+      isLoadingVideo = false;
+      proximoItem();
+      return;
+    }
+
+    // Esconder imagem
+    img.style.display = "none";
+    img.classList.remove("hidden-ready");
+    clearTransitionSnapshotUrl();
+    img.src = "";
+
+    // Esconder vídeo ativo
+    activeVideo.style.display = "none";
+    activeVideo.classList.remove("hidden-ready");
+    activeVideo.pause();
+    activeVideo.removeAttribute("src");
+    activeVideo.load();
+
+    // Mostrar vídeo inativo (agora ativo)
+    inactiveVideo.style.display = "block";
+    inactiveVideo.classList.remove("hidden-ready");
+    inactiveVideo.style.opacity = "1";
+    isPlaying = true;
+    videoRetryCount = 0;
+    isLoadingVideo = false;
+
+    inactiveVideo.play().catch((e) => {
+      inactiveVideo.muted = true;
+      inactiveVideo.play().catch(() => proximoItem());
+    });
+
+    // Trocar referência de ativo
+    swapActiveVideo();
+
+    // onended para avançar
+    inactiveVideo.onended = async () => {
+      isPlaying = false;
+      const mudou = await verificarCodigoDispositivoAoCiclo();
+      if (mudou) return;
+      if (pendingResync) {
+        pendingResync = false;
+        await carregarConteudo(currentPlaylistId || codigoAtual);
+      }
+      proximoItem();
+    };
+  } else {
+    // ...existing code...
+    // IMAGEM: manter lógica original
+    // ...existing code...
+  }
+}
+
     // Timeout adaptativo baseado na velocidade de rede detectada
     const safetyTimeoutMs = networkSpeed === 'slow' ? 20000 : networkSpeed === 'fast' ? 7000 : 9000;
     const safetyTimeout = setTimeout(() => {
@@ -2488,44 +2521,370 @@ async function tocarLoop() {
     detectNetworkSpeed().catch(() => {});
 
     try {
-      // Pré-carregar no vídeo inativo
-      inactiveVideo.setAttribute("crossorigin", "anonymous");
-      inactiveVideo.preload = "auto";
-      inactiveVideo.src = itemUrl;
-      inactiveVideo.load();
-      const ok = await waitForVideoReady(inactiveVideo, 8000);
-      if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
-      if (!ok) {
+      if (isHls) {
+        // ---- HLS ----
+        destroyHls();
+        // Safari/iOS suporta nativo
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.setAttribute("crossorigin", "anonymous");
+          video.preload = "auto";
+          video.src = itemUrl;
+          video.load();
+
+          // Timeout adaptativo para internet lenta (usa velocidade já detectada)
+          const hlsTimeout = networkSpeed === 'slow' ? 12000 : networkSpeed === 'fast' ? 3000 : 4000;
+          const ok = await waitForVideoReady(video, hlsTimeout);
+          if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
+          if (!ok) { 
+            console.warn("⚠️ Vídeo não ficou pronto a tempo (timeout:", hlsTimeout, "ms)");
+            isLoadingVideo = false; 
+            clearTimeout(safetyTimeout); 
+            // Tentar próximo item apenas se não for internet lenta (pode ser só demorado)
+            if (networkSpeed !== 'slow') {
+              proximoItem(); 
+            } else {
+              // Internet lenta: tentar novamente após um delay
+              console.log("⏳ Internet lenta detectada, aguardando mais um pouco antes de tentar próximo item...");
+              setTimeout(() => tocarLoop(), 2000);
+            }
+            return; 
+          }
+
+          const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
+          const focus = item.focus || "center center";
+          applyFit(video, fit, focus);
+
+          // Esconder qualquer imagem exibida ou snapshot (transição suave)
+          if (wasImage || wasVideo) {
+            img.style.display = "none";
+            img.classList.remove("hidden-ready");
+            clearTransitionSnapshotUrl();
+            img.src = "";
+          }
+          
+          // Mostrar vídeo e garantir que está visível
+          video.style.display = "block";
+          video.classList.remove("hidden-ready");
+          video.style.opacity = "1";
+          
+          isPlaying = true;
+          videoRetryCount = 0;
+          isLoadingVideo = false;
+          clearTimeout(safetyTimeout);
+          
+          video.play().catch((e) => {
+            console.error("Erro play HLS:", e);
+            video.muted = true;
+            video.play().catch(() => proximoItem());
+          });
+          
+          // Tentar fullscreen quando vídeo HLS começar a tocar (múltiplas tentativas)
+          setTimeout(() => entrarFullscreen(), 500);
+          setTimeout(() => entrarFullscreen(), 1500);
+          setTimeout(() => entrarFullscreen(), 3000);
+        } else if (window.Hls && window.Hls.isSupported()) {
+          hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
+          hls.loadSource(itemUrl);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (myToken !== playToken || videoToken !== currentVideoToken) return;
+
+            video.setAttribute("crossorigin", "anonymous");
+            video.preload = "auto";
+
+            const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
+            const focus = item.focus || "center center";
+            applyFit(video, fit, focus);
+
+            // Esconder qualquer imagem exibida ou snapshot (transição suave)
+            if (wasImage || wasVideo) {
+              img.style.display = "none";
+              img.classList.remove("hidden-ready");
+              clearTransitionSnapshotUrl();
+              img.src = "";
+            }
+            
+            // Mostrar vídeo e garantir que está visível
+            video.style.display = "block";
+            video.classList.remove("hidden-ready");
+            video.style.opacity = "1";
+            
+            isPlaying = true;
+            videoRetryCount = 0;
+            isLoadingVideo = false;
+            clearTimeout(safetyTimeout);
+            
+            video.play().catch(() => { video.muted = true; video.play(); });
+          });
+          hls.on(Hls.Events.ERROR, (evt, data) => {
+            if (data.fatal) {
+              switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR: hls.startLoad(); break;
+                case Hls.ErrorTypes.MEDIA_ERROR:   hls.recoverMediaError(); break;
+                default:
+                  destroyHls(); isLoadingVideo = false; clearTimeout(safetyTimeout); proximoItem();
+              }
+            }
+          });
+        } else {
+          // fallback direto
+          video.setAttribute("crossorigin", "anonymous");
+          video.preload = "auto";
+          video.src = itemUrl;
+          video.load();
+
+          // Timeout adaptativo para internet lenta (usa velocidade já detectada)
+          const hlsTimeout = networkSpeed === 'slow' ? 12000 : networkSpeed === 'fast' ? 3000 : 4000;
+          const ok = await waitForVideoReady(video, hlsTimeout);
+          if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
+          if (!ok) { 
+            console.warn("⚠️ Vídeo não ficou pronto a tempo (timeout:", hlsTimeout, "ms)");
+            isLoadingVideo = false; 
+            clearTimeout(safetyTimeout); 
+            // Tentar próximo item apenas se não for internet lenta (pode ser só demorado)
+            if (networkSpeed !== 'slow') {
+              proximoItem(); 
+            } else {
+              // Internet lenta: tentar novamente após um delay
+              console.log("⏳ Internet lenta detectada, aguardando mais um pouco antes de tentar próximo item...");
+              setTimeout(() => tocarLoop(), 2000);
+            }
+            return; 
+          }
+
+          const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
+          const focus = item.focus || "center center";
+          applyFit(video, fit, focus);
+
+          // Esconder qualquer imagem exibida ou snapshot (transição suave)
+          if (wasImage || wasVideo) {
+            img.style.display = "none";
+            img.classList.remove("hidden-ready");
+            clearTransitionSnapshotUrl();
+            img.src = "";
+          }
+          
+          // Mostrar vídeo e garantir que está visível
+          video.style.display = "block";
+          video.classList.remove("hidden-ready");
+          video.style.opacity = "1";
+          
+          isPlaying = true;
+          videoRetryCount = 0;
+          isLoadingVideo = false;
+          clearTimeout(safetyTimeout);
+          
+          video.play().catch(() => { video.muted = true; video.play(); });
+        }
+      } else {
+        // ---- MP4/WebM/etc (sem HEAD) ----
+        // limpa e seta atributos antes do src
+        video.setAttribute("crossorigin", "anonymous");
+        video.preload = "auto";
+
+        // Verificar se o vídeo está no cache (tanto online quanto offline)
+        try {
+          let loadedFromPreload = false;
+          const canUsePreloadedVideo =
+            preloadNextState.ready &&
+            preloadNextState.isVideo &&
+            preloadNextState.url === itemUrl &&
+            preloadNextState.videoEl;
+
+          if (canUsePreloadedVideo) {
+            const preloadSrc =
+              preloadNextState.videoEl.currentSrc ||
+              preloadNextState.videoEl.src ||
+              itemUrl;
+            const preloadReady = preloadNextState.videoEl.readyState >= 3;
+            if (preloadReady) {
+              // Fast-path real: sem espera/await para trocar imediatamente.
+              video.src = preloadSrc;
+              if (preloadNextState.blobUrl && preloadSrc === preloadNextState.blobUrl) {
+                const keepBlobUrl = preloadNextState.blobUrl;
+                preloadNextState.blobUrl = null; // transfere ownership para player principal
+                const cleanupBlob = () => {
+                  try { URL.revokeObjectURL(keepBlobUrl); } catch {}
+                };
+                video.addEventListener('ended', cleanupBlob, { once: true });
+                video.addEventListener('loadstart', () => {
+                  if (video.src !== keepBlobUrl) cleanupBlob();
+                }, { once: true });
+              }
+              clearPreloadNextState();
+              loadedFromPreload = true;
+            }
+          }
+
+          if (!loadedFromPreload) {
+            const cacheKey = `${codigoAtual}::${itemUrl}`;
+            const cachedBlob = await idbGet(cacheKey);
+            
+            if (cachedBlob) {
+              console.log("📦 Carregando vídeo do cache:", itemUrl, "tamanho:", (cachedBlob.size / 1024 / 1024).toFixed(2), "MB");
+              // Criar URL do blob para o vídeo
+              const blobUrl = URL.createObjectURL(cachedBlob);
+              video.src = blobUrl;
+              video.load();
+              
+              // Limpar URL do blob quando o vídeo terminar ou quando mudar de vídeo
+              const cleanupBlob = () => {
+                URL.revokeObjectURL(blobUrl);
+              };
+              video.addEventListener('ended', cleanupBlob, { once: true });
+              video.addEventListener('loadstart', () => {
+                // Se o vídeo mudar antes de terminar, limpar o blob anterior
+                if (video.src !== blobUrl) {
+                  cleanupBlob();
+                }
+              }, { once: true });
+              
+              const ok = await waitForVideoReady(video, 8000);
+              if (myToken !== playToken || videoToken !== currentVideoToken) { 
+                cleanupBlob();
+                isLoadingVideo = false; 
+                clearTimeout(safetyTimeout); 
+                return; 
+              }
+              if (!ok || video.readyState < 3) {
+                console.error("Vídeo do cache não ficou pronto (readyState:", video.readyState, ")");
+                cleanupBlob();
+                isLoadingVideo = false; 
+                clearTimeout(safetyTimeout);
+                
+                // Limpar elementos se falhou
+                if (wasImage) {
+                  img.style.display = "block";
+                } else if (wasVideo) {
+                  video.style.display = "block";
+                }
+                
+                proximoItem(); 
+                return;
+              }
+            } else {
+            // Vídeo não está no cache - usar URL original
+            if (!navigator.onLine) {
+              console.warn("⚠️ Vídeo não encontrado no cache offline:", itemUrl);
+              isLoadingVideo = false; 
+              clearTimeout(safetyTimeout);
+              proximoItem(); 
+              return;
+            }
+            
+            console.log("🌐 Carregando vídeo da rede:", itemUrl);
+            // aplicar src e carregar normalmente quando online
+            video.src = itemUrl;
+            video.load();
+
+            // Timeout adaptativo para internet lenta (usa velocidade já detectada)
+            const mp4Timeout = networkSpeed === 'slow' ? 24000 : networkSpeed === 'fast' ? 6000 : 8000;
+            const ok = await waitForVideoReady(video, mp4Timeout);
+            if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
+            if (!ok || video.readyState < 3) {
+              console.warn("⚠️ Vídeo não ficou pronto (readyState:", video.readyState, ", timeout:", mp4Timeout, "ms)");
+              isLoadingVideo = false; 
+              clearTimeout(safetyTimeout);
+              // Se internet lenta, aguardar mais antes de desistir
+              if (networkSpeed === 'slow' && video.readyState >= 2) {
+                console.log("⏳ Internet lenta detectada, aguardando mais um pouco...");
+                setTimeout(() => {
+                  if (video.readyState >= 3) {
+                    // Vídeo ficou pronto, continuar
+                    const fit = item.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
+                    const focus = item.focus || "center center";
+                    applyFit(video, fit, focus);
+                    
+                    // Esconder qualquer imagem exibida ou snapshot (transição suave)
+                    if (wasImage || wasVideo) {
+                      img.style.display = "none";
+                      img.classList.remove("hidden-ready");
+                      clearTransitionSnapshotUrl();
+                      img.src = "";
+                    }
+                    
+                    // Mostrar vídeo e garantir que está visível
+                    video.style.display = "block";
+                    video.classList.remove("hidden-ready");
+                    video.style.opacity = "1";
+                    
+                    isPlaying = true;
+                    videoRetryCount = 0;
+                    isLoadingVideo = false;
+                    clearTimeout(safetyTimeout);
+                    
+                    video.play().catch((playError) => {
+                      console.error("Erro ao reproduzir vídeo:", playError);
+                      video.muted = true;
+                      video.play().catch(() => {
+                        isLoadingVideo = false;
+                        clearTimeout(safetyTimeout);
+                        proximoItem();
+                      });
+                    });
+                  } else {
+                    proximoItem();
+                  }
+                }, 3000);
+                return;
+              }
+              proximoItem(); 
+              return;
+            }
+          }
+          }
+        } catch (error) {
+          console.error("Erro ao carregar vídeo do cache:", error);
+          // Em caso de erro, tentar carregar da rede se estiver online
+          if (navigator.onLine) {
+            console.log("🌐 Tentando carregar vídeo da rede após erro no cache:", itemUrl);
+            video.src = itemUrl;
+            video.load();
+            const mp4Timeout = networkSpeed === 'slow' ? 24000 : networkSpeed === 'fast' ? 6000 : 8000;
+            const ok = await waitForVideoReady(video, mp4Timeout);
+            if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
+            if (!ok || video.readyState < 3) {
+              console.warn("⚠️ Vídeo não ficou pronto após erro no cache (readyState:", video.readyState, ")");
+              isLoadingVideo = false; 
+              clearTimeout(safetyTimeout);
+              proximoItem(); 
+              return;
+            }
+          } else {
+            console.error("Erro ao carregar vídeo e está offline:", error);
+            isLoadingVideo = false; 
+            clearTimeout(safetyTimeout); 
+            proximoItem(); 
+            return;
+          }
+        }
+
+        const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
+        const focus = item.focus || "center center";
+        applyFit(video, fit, focus);
+
+        // Esconder imagem ANTES de mostrar vídeo (transição suave)
+        if (wasImage || wasVideo) {
+          img.style.display = "none";
+          img.classList.remove("hidden-ready");
+          clearTransitionSnapshotUrl();
+          img.src = "";
+        }
+        
+        // Mostrar vídeo e garantir que está visível
+        video.style.display = "block";
+        video.classList.remove("hidden-ready");
+        video.style.opacity = "1";
+        
+        isPlaying = true;
+        videoRetryCount = 0;
+>>>>>>> 1181ccf (feat: alternância instantânea entre dois elementos <video> para transição sem tela preta)
         isLoadingVideo = false;
         clearTimeout(safetyTimeout);
         proximoItem();
         return;
       }
 
-      // Transição suave: alterna visibilidade/opacidade
-      swapVideos();
-      showActiveVideo();
-
-      isPlaying = true;
-      videoRetryCount = 0;
-      isLoadingVideo = false;
-      clearTimeout(safetyTimeout);
-
-      activeVideo.play().catch(() => {
-        activeVideo.muted = true;
-        activeVideo.play().catch(() => proximoItem());
-      });
-
-      activeVideo.onended = async () => {
-        isPlaying = false;
-        const mudou = await verificarCodigoDispositivoAoCiclo();
-        if (mudou) return;
-        if (pendingResync) {
-          pendingResync = false;
-          await carregarConteudo(currentPlaylistId || codigoAtual);
-        }
-        proximoItem();
-      };
     } catch (e) {
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
@@ -2556,16 +2915,16 @@ async function tocarLoop() {
       // Limpar vídeo anterior se estava tocando
       if (wasVideo) {
         try { 
-          video.pause(); 
-          video.currentTime = 0;
-          video.removeAttribute("src");
-          video.load();
+          activeVideo.pause(); 
+          activeVideo.currentTime = 0;
+          activeVideo.removeAttribute("src");
+          activeVideo.load();
         } catch {}
       }
       
       // Esconder vídeo ANTES de mostrar imagem (transição suave)
-      video.style.display = "none";
-      video.classList.remove("hidden-ready");
+      activeVideo.style.display = "none";
+      activeVideo.classList.remove("hidden-ready");
       
       // Mostrar imagem e garantir que está visível
       img.style.display = "block";
