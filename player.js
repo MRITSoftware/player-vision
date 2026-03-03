@@ -20,8 +20,10 @@ const POLLING_MS = 1000; // 1 segundo para resposta instantânea
 // - "progressive": Espera buffer mínimo antes de tocar (recomendado - melhor equilíbrio)
 // - "full": Espera carregar 100% antes de tocar (mais seguro, mas mais lento)
 // - "immediate": Toca assim que possível (mais rápido, pode travar em conexões lentas)
-const BUFFERING_MODE = "immediate"; // ou "full" ou "progressive"
-const MIN_BUFFER_SECONDS = 1; // usado apenas no modo "progressive"
+// Por padrão mudar para "progressive" para reduzir travamentos/piscadas em transições
+const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
+// Aumentar buffer mínimo para dar mais margem durante trocas em conexões instáveis
+const MIN_BUFFER_SECONDS = 3; // usado apenas no modo "progressive"
 
 let playlist = [];
 let currentIndex = 0;
@@ -2275,7 +2277,8 @@ async function preloadNextItemBuffer(currentIdx) {
 
     preloadVideo.src = preloadUrl;
     preloadVideo.load();
-    const ok = await waitForVideoReady(preloadVideo, 4000);
+    // Dar mais tempo para o preload em background (reduz cortes ao trocar)
+    const ok = await waitForVideoReady(preloadVideo, 8000);
     if (myToken !== preloadNextState.token) return;
     if (!ok) return;
 
