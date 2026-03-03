@@ -50,6 +50,8 @@ let preloadedBufferUrl = null;
 let preloadingBuffer = false;
 let lastFailedUrl = null;
 let lastFailedRetries = 0;
+let lastShortEndUrl = null;
+let lastShortEndRetries = 0;
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
@@ -89,6 +91,9 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     if (preloadedBufferUrl === nextUrl && preloadEl.readyState >= 2) return;
 
     preloadingBuffer = true;
+    preloadEl.onended = null;
+    try { preloadEl.pause(); } catch {}
+    try { preloadEl.currentTime = 0; } catch {}
     preloadEl.setAttribute("crossorigin", "anonymous");
     preloadEl.preload = "auto";
     preloadEl.muted = true;
@@ -2150,6 +2155,9 @@ async function tocarLoop() {
         return;
       }
 
+      // Garantir início no começo para evitar "fim imediato" em elementos reutilizados.
+      try { nextVideo.currentTime = 0; } catch {}
+
       const fit = item.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
       const focus = item.focus || "center center";
       applyFit(nextVideo, fit, focus);
@@ -2202,7 +2210,27 @@ async function tocarLoop() {
       videoBuffer = previousVideo || nextVideo;
       preloadedBufferUrl = null;
 
+      const onEndedToken = myToken;
+      const startedAt = performance.now();
       video.onended = () => {
+        if (onEndedToken !== playToken) return;
+        const elapsed = performance.now() - startedAt;
+        if (elapsed < 250) {
+          if (lastShortEndUrl === itemUrl) {
+            lastShortEndRetries += 1;
+          } else {
+            lastShortEndUrl = itemUrl;
+            lastShortEndRetries = 1;
+          }
+          if (lastShortEndRetries <= 1) {
+            isPlaying = false;
+            setTimeout(() => tocarLoop(), 80);
+            return;
+          }
+        } else {
+          lastShortEndUrl = null;
+          lastShortEndRetries = 0;
+        }
         isPlaying = false;
         proximoItem();
         verificarMudancasPosTrocaEmBackground();
@@ -2266,6 +2294,7 @@ async function tocarLoop() {
 
     if (typeof duration === "number" && duration > 0) {
       img.timeoutId = setTimeout(() => {
+        if (myToken !== playToken) return;
         isPlaying = false;
         proximoItem();
         verificarMudancasPosTrocaEmBackground();
