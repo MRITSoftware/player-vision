@@ -655,8 +655,8 @@ async function retomarCacheInstantaneo(codigo) {
 function startPlayer() {
   iniciar();
 }
-
-// Expor função global para o botão Iniciar
+// ...existing code...
+// Expor função global para o botão Iniciar (garantido ao final do arquivo)
 window.startPlayer = startPlayer;
 }
 
