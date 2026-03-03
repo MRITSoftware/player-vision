@@ -40,11 +40,14 @@ let isPlaying = false;
 let realtimeReady = false;
 let onlineDebounceId = null;
 let pendingResync = false;
+let lastCycleRefreshAt = 0;
 let videoRetryCount = 0;
 const MAX_VIDEO_RETRIES = 3;
 let isLoadingVideo = false;
 let currentVideoToken = 0;
 let cycleCheckInFlight = false;
+let preloadedBufferUrl = null;
+let preloadingBuffer = false;
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
@@ -59,6 +62,44 @@ function getUniqueVideoEls() {
   if (video) out.push(video);
   if (videoBuffer && videoBuffer !== video) out.push(videoBuffer);
   return out;
+}
+
+function isVideoItem(item, itemUrl) {
+  const tipo = (item?.tipo || "").toLowerCase();
+  return /\.m3u8(\?|$)/i.test(itemUrl) ||
+    tipo.includes("video") ||
+    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
+}
+
+async function preloadUpcomingVideoInBuffer(baseIndex) {
+  try {
+    if (preloadingBuffer || !playlist.length) return;
+    const preloadEl = (videoBuffer && videoBuffer !== video) ? videoBuffer : null;
+    if (!preloadEl) return;
+
+    const nextIndex = (baseIndex + 1) % playlist.length;
+    const nextItem = playlist[nextIndex];
+    if (!nextItem || !nextItem.url) return;
+    const nextUrl = pickSourceForOrientation(nextItem);
+    if (!nextUrl) return;
+    if (!isVideoItem(nextItem, nextUrl)) return;
+    if (/\.m3u8(\?|$)/i.test(nextUrl)) return; // HLS segue fluxo normal
+    if (preloadedBufferUrl === nextUrl && preloadEl.readyState >= 2) return;
+
+    preloadingBuffer = true;
+    preloadEl.setAttribute("crossorigin", "anonymous");
+    preloadEl.preload = "auto";
+    preloadEl.muted = true;
+    preloadEl.playsInline = true;
+    preloadEl.src = nextUrl;
+    preloadEl.load();
+    const ok = await waitForCanPlay(preloadEl, 1500);
+    if (ok) preloadedBufferUrl = nextUrl;
+  } catch {
+    // best effort
+  } finally {
+    preloadingBuffer = false;
+  }
 }
 
 // ===== Constantes para localStorage =====
@@ -1635,7 +1676,7 @@ async function carregarConteudo(codigoConteudo) {
           });
           
           // Iniciar reproduÃ§Ã£o imediatamente do cache
-          if (!isPlaying) {
+          if (!isPlaying && !isLoadingVideo) {
             tocarLoop();
           }
           
@@ -2001,6 +2042,8 @@ async function resetAllCachesForNewCode() {
     v.removeAttribute("src");
     v.load();
   }
+  preloadedBufferUrl = null;
+  preloadingBuffer = false;
   img.src = "";
   
   // Marcar cache como nÃ£o pronto ao trocar de cÃ³digo
@@ -2031,8 +2074,7 @@ async function tocarLoop() {
   currentItemUrl = itemUrl;
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
-  const isVideo = isHls || (item.tipo || "").toLowerCase().includes("video") ||
-    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
+  const isVideo = isVideoItem(item, itemUrl);
 
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
@@ -2054,7 +2096,9 @@ async function tocarLoop() {
       nextVideo.setAttribute("crossorigin", "anonymous");
       nextVideo.preload = "auto";
 
-      if (isHls) {
+      if (!isHls && preloadedBufferUrl === itemUrl && nextVideo.readyState >= 2) {
+        // Buffer já aquecido: troca praticamente instantânea.
+      } else if (isHls) {
         destroyHls();
         if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
           nextVideo.src = itemUrl;
@@ -2137,12 +2181,16 @@ async function tocarLoop() {
 
       video = nextVideo;
       videoBuffer = previousVideo || nextVideo;
+      preloadedBufferUrl = null;
 
       video.onended = () => {
         isPlaying = false;
         proximoItem();
         verificarMudancasPosTrocaEmBackground();
       };
+
+      // Pré-aquecer o próximo item no buffer inativo sem bloquear reprodução.
+      preloadUpcomingVideoInBuffer(currentIndex).catch(() => {});
     } catch (e) {
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
@@ -2174,6 +2222,8 @@ async function tocarLoop() {
       v.style.display = "none";
       v.classList.remove("hidden-ready");
     }
+    preloadedBufferUrl = null;
+    preloadingBuffer = false;
 
     img.style.display = "block";
     img.classList.remove("hidden-ready");
@@ -2187,6 +2237,9 @@ async function tocarLoop() {
         verificarMudancasPosTrocaEmBackground();
       }, duration);
     }
+
+    // Se o próximo item for vídeo, já pré-aquece durante exibição da imagem.
+    preloadUpcomingVideoInBuffer(currentIndex).catch(() => {});
   };
 
   img.onerror = () => {
@@ -2592,15 +2645,13 @@ function proximoItem() {
     verificarCodigoDispositivoAoCiclo().then((mudou) => {
       if (mudou) return;
       if (!currentPlaylistId) return;
+      const now = Date.now();
+      if (now - lastCycleRefreshAt < 30000) return; // throttle
+      lastCycleRefreshAt = now;
 
-      console.log("ðŸ”„ Recarregando playlist do banco em background...");
-      const indiceParaContinuar = currentIndex;
-      carregarConteudo(currentPlaylistId).then(() => {
-        if (playlist.length > 0) {
-          currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
-        }
-      }).catch(err => {
-        console.error("âŒ Erro ao recarregar playlist:", err);
+      console.log("ðŸ”„ Verificando mudanÃ§as de playlist em background...");
+      verificarMudancasPlaylistEmBackground(currentPlaylistId, currentPlaylistId).catch(err => {
+        console.error("âŒ Erro ao verificar mudanÃ§as da playlist:", err);
       });
     }).catch(err => {
       console.warn("âš ï¸ Erro na verificaÃ§Ã£o de ciclo:", err);
@@ -2963,6 +3014,8 @@ async function pararTudoMostrarLogin() {
     } catch {}
     v.style.display = "none";
   }
+  preloadedBufferUrl = null;
+  preloadingBuffer = false;
   
   // Destruir HLS
   destroyHls();
