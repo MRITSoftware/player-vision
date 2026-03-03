@@ -656,6 +656,10 @@ function startPlayer() {
   iniciar();
 }
 
+// Expor função global para o botão Iniciar
+window.startPlayer = startPlayer;
+}
+
 // ===== Função para verificar código salvo =====
 async function verificarCodigoSalvo() {
   try {
