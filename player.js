@@ -20,10 +20,8 @@ const POLLING_MS = 1000; // 1 segundo para resposta instantânea
 // - "progressive": Espera buffer mínimo antes de tocar (recomendado - melhor equilíbrio)
 // - "full": Espera carregar 100% antes de tocar (mais seguro, mas mais lento)
 // - "immediate": Toca assim que possível (mais rápido, pode travar em conexões lentas)
-// Por padrão usar "progressive" para reduzir travamentos/piscadas em transições
 const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
-// Buffer mínimo maior para dar mais margem durante trocas em conexões instáveis
-const MIN_BUFFER_SECONDS = 3; // usado apenas no modo "progressive"
+const MIN_BUFFER_SECONDS = 5; // Segundos mínimos de buffer para modo "progressive"
 
 let playlist = [];
 let currentIndex = 0;
@@ -46,43 +44,14 @@ let videoRetryCount = 0;
 const MAX_VIDEO_RETRIES = 3;
 let isLoadingVideo = false;
 let currentVideoToken = 0;
-let emptyPlaylistRetryTimer = null;
-let reconnectMonitorTimer = null;
-let lastKnownOnlineState = navigator.onLine;
-let preloadNextState = {
-  index: -1,
-  url: null,
-  isVideo: false,
-  ready: false,
-  loading: false,
-  token: 0,
-  imageEl: null,
-  videoEl: null,
-  blobUrl: null
-};
 
 // ===== Variáveis de promoção =====
 let promoData = null;
 let promoCounter = null;
 let promoPopup = null;
 
-// Dual video elements for instant transitions
-const videoEls = [
-  document.getElementById("videoPlayerA"),
-  document.getElementById("videoPlayerB")
-];
-let activeVideoIdx = 0;
+const video = document.getElementById("videoPlayer");
 const img = document.getElementById("imgPlayer");
-
-function getActiveVideo() {
-  return videoEls[activeVideoIdx];
-}
-function getInactiveVideo() {
-  return videoEls[1 - activeVideoIdx];
-}
-function swapActiveVideo() {
-  activeVideoIdx = 1 - activeVideoIdx;
-}
 
 // ===== Constantes para localStorage =====
 const CODIGO_DISPLAY_KEY = 'mrit_display_codigo';
@@ -406,32 +375,6 @@ async function idbAllKeys() {
   });
 }
 
-async function limparIdbNaoUsadoDaPlaylist(playlistData) {
-  if (!codigoAtual) return;
-  try {
-    const keepUrls = new Set();
-    for (const item of (playlistData || [])) {
-      if (!item) continue;
-      if (item.url) keepUrls.add(item.url);
-      if (item.urlPortrait) keepUrls.add(item.urlPortrait);
-      if (item.urlLandscape) keepUrls.add(item.urlLandscape);
-    }
-
-    const keys = await idbAllKeys();
-    const prefix = `${codigoAtual}::`;
-    for (const key of keys) {
-      const ks = String(key);
-      if (!ks.startsWith(prefix)) continue;
-      const url = ks.slice(prefix.length);
-      if (!keepUrls.has(url)) {
-        await idbDel(ks);
-      }
-    }
-  } catch (err) {
-    console.warn("⚠️ Falha ao limpar IDB fora da playlist atual:", err);
-  }
-}
-
 // ===== Cache helpers (namespaced por código) =====
 function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
@@ -598,56 +541,6 @@ function pickSourceForOrientation(item) {
   if (ORIENTATION === "portrait" && item.urlPortrait)  return item.urlPortrait;
   if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
   return item.url;
-}
-
-async function retomarCacheInstantaneo(codigo) {
-  try {
-    if (!codigo) return false;
-    const raw = localStorage.getItem(cacheKeyFor(codigo));
-    if (!raw) return false;
-
-    const data = JSON.parse(raw);
-    if (!data?.playlist || !Array.isArray(data.playlist) || data.playlist.length === 0) {
-      return false;
-    }
-
-    codigoAtual = codigo;
-    playlist = data.playlist;
-    currentPlaylistId = data.codigo || null;
-    currentContentCode = data.contentCode || data.codigo || codigo;
-    currentIndex = 0;
-    currentItemUrl = null;
-    isPlaying = false;
-    isLoadingVideo = false;
-    clearPreloadNextState();
-
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({
-        action: "setNamespace",
-        namespace: codigo
-      });
-    }
-
-    const inputDiv = document.getElementById("codigoInput");
-    const rodape = document.getElementById("rodape");
-    const logo = document.getElementById("logo");
-    if (inputDiv) inputDiv.style.display = "none";
-    if (rodape) rodape.style.display = "none";
-    if (logo) logo.style.display = "none";
-
-    if (currentPlaylistId) {
-      subscribePlaylistChannel(currentPlaylistId);
-    } else {
-      subscribePlaylistChannel(null);
-    }
-
-    tocarLoop();
-    console.log("⚡ Retomada instantânea via cache local");
-    return true;
-  } catch (err) {
-    console.warn("⚠️ Falha na retomada instantânea via cache:", err);
-    return false;
-  }
 }
 
 // ===== Player =====
@@ -1080,7 +973,6 @@ async function verificarCodigoSalvo() {
               }, 600);
               
               // Iniciar automaticamente (após garantir que elementos estão escondidos)
-              retomarCacheInstantaneo(codigoSalvo.trim().toUpperCase()).catch(() => {});
               setTimeout(() => {
                 startPlayer();
               }, 500);
@@ -1131,7 +1023,6 @@ async function verificarCodigoSalvo() {
       } else {
         // Offline: usar código salvo mesmo sem verificação
         console.log("📴 Modo offline, usando código salvo");
-        retomarCacheInstantaneo(codigoSalvo.trim().toUpperCase()).catch(() => {});
         setTimeout(() => {
           startPlayer();
         }, 1000);
@@ -1501,11 +1392,8 @@ async function iniciar() {
     }
   }
 
-  // Reset agressivo apenas quando realmente troca de código.
-  // Em reinício com mesmo código, manter cache para retomada instantânea.
-  if (codigoAnterior && codigoAnterior !== codigo) {
-    await resetAllCachesForNewCode();
-  }
+  // Reset agressivo ao trocar de código (garante que nada da sessão anterior vaze)
+  await resetAllCachesForNewCode();
 
   if (!navigator.onLine) {
     const cache = localStorage.getItem(cacheKeyFor(codigo));
@@ -1695,28 +1583,6 @@ async function iniciar() {
 
 async function carregarConteudo(codigoConteudo) {
   try {
-    const mudouConteudo = currentContentCode && currentContentCode !== codigoConteudo;
-    if (mudouConteudo) {
-      // Troca real de conteúdo: limpa completamente a mídia anterior para
-      // evitar frame residual da imagem/vídeo antigo.
-      try { video.pause(); } catch {}
-      destroyHls();
-      if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
-      video.removeAttribute("src");
-      video.load();
-      video.style.display = "none";
-      video.classList.remove("hidden-ready");
-      clearTransitionSnapshotUrl();
-      img.src = "";
-      img.style.display = "none";
-      img.classList.remove("hidden-ready");
-      isPlaying = false;
-      isLoadingVideo = false;
-      currentItemUrl = null;
-      currentIndex = 0;
-      clearPreloadNextState();
-    }
-
     const wasPlaying = !video.paused && video.style.display === "block";
     const currentTime = video.currentTime;
     const wasVideo = video.style.display === "block";
@@ -1729,19 +1595,6 @@ async function carregarConteudo(codigoConteudo) {
       try {
         const data = JSON.parse(cacheSalvo);
         if (data.playlist && Array.isArray(data.playlist) && data.playlist.length > 0) {
-          const cachedPlaylistId = data.codigo || null;
-          const cachedContentCode = data.contentCode || null;
-          const cacheCompativel =
-            (cachedContentCode && cachedContentCode === codigoConteudo) ||
-            (!cachedContentCode && (cachedPlaylistId === codigoConteudo || (codigoConteudo === codigoAtual && cachedPlaylistId === codigoAtual)));
-
-          if (!cacheCompativel) {
-            console.log("ℹ️ Cache ignorado por não corresponder ao conteúdo solicitado:", {
-              solicitado: codigoConteudo,
-              cacheCodigo: cachedPlaylistId,
-              cacheContentCode: cachedContentCode
-            });
-          } else {
           console.log("📦 Cache encontrado! Carregando playlist do cache:", data.playlist.length, "itens");
           
           // Configurar namespace no Service Worker para usar o cache correto
@@ -1753,6 +1606,7 @@ async function carregarConteudo(codigoConteudo) {
           }
           
           // Carregar playlist do cache imediatamente
+          const cachedPlaylistId = data.codigo || null;
           playlist = data.playlist;
           currentPlaylistId = cachedPlaylistId;
           currentContentCode = codigoConteudo;
@@ -1785,7 +1639,6 @@ async function carregarConteudo(codigoConteudo) {
           }
           
           return; // Retornar aqui - já carregou do cache
-          }
         }
       } catch (err) {
         console.warn("⚠️ Erro ao carregar cache salvo, buscando do banco:", err);
@@ -1987,11 +1840,6 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 
   playlist = Array.isArray(newPlaylist) ? newPlaylist : [];
   currentPlaylistId = playlistId ?? null;
-  if (emptyPlaylistRetryTimer) {
-    clearTimeout(emptyPlaylistRetryTimer);
-    emptyPlaylistRetryTimer = null;
-  }
-  clearPreloadNextState();
   
   // Se a playlist mudou, o Service Worker vai limpar apenas o que não está na nova playlist
   // Mantém automaticamente os vídeos/imagens que estão na nova playlist (cache inteligente)
@@ -2006,34 +1854,18 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   }
   
   await salvarCache(playlist, (playlistId ?? codigoAtual));
-  await limparIdbNaoUsadoDaPlaylist(playlist);
 
   if (!playlist.length) {
     try { video.pause(); } catch {}
     destroyHls();
     if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
     isPlaying = false;
-    video.removeAttribute("src");
-    video.load();
     video.style.display = "none";
-    video.classList.remove("hidden-ready");
     img.style.display = "none";
-    img.classList.remove("hidden-ready");
-    clearTransitionSnapshotUrl();
-    img.src = "";
     currentItemUrl = null;
     currentIndex = 0;
     // Playlist vazia = cache não pronto
     await atualizarStatusCache(codigoAtual, false);
-    const codigoRecarregar = currentPlaylistId || codigoAtual;
-    if (codigoRecarregar) {
-      // Fallback defensivo: se o realtime falhar, tenta recarregar até aparecer itens.
-      emptyPlaylistRetryTimer = setTimeout(async () => {
-        if (!playlist || playlist.length === 0) {
-          await carregarConteudo(codigoRecarregar);
-        }
-      }, 5000);
-    }
     return;
   }
   
@@ -2097,14 +1929,6 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   destroyHls();
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
   isPlaying = false;
-  video.removeAttribute("src");
-  video.load();
-  video.style.display = "none";
-  video.classList.remove("hidden-ready");
-  img.style.display = "none";
-  img.classList.remove("hidden-ready");
-  clearTransitionSnapshotUrl();
-  img.src = "";
   currentItemUrl = null;
   
   // Garantir que currentIndex esteja dentro dos limites válidos
@@ -2134,11 +1958,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 
 async function salvarCache(playlistData, codigo) {
   // cache namespaced por código
-  localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({
-    playlist: playlistData,
-    codigo,
-    contentCode: currentContentCode || null
-  }));
+  localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
 
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
     console.log("📤 Enviando playlist para Service Worker:", playlistData.length, "itens");
@@ -2168,240 +1988,17 @@ async function resetAllCachesForNewCode() {
   try { video.pause(); } catch {}
   video.removeAttribute("src");
   video.load();
-  video.style.display = "none";
-  video.classList.remove("hidden-ready");
-  clearTransitionSnapshotUrl();
   img.src = "";
-  img.style.display = "none";
-  img.classList.remove("hidden-ready");
   
   // Marcar cache como não pronto ao trocar de código
   if (codigoAtual) {
     await atualizarStatusCache(codigoAtual, false);
   }
-  clearPreloadNextState();
-}
-
-function isVideoMediaItem(item, itemUrl) {
-  const url = itemUrl || "";
-  const tipo = (item?.tipo || "").toLowerCase();
-  const isHls = /\.m3u8(\?|$)/i.test(url);
-  return isHls ||
-    tipo.includes("vídeo") ||
-    tipo.includes("video") ||
-    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
-}
-
-function clearPreloadNextState() {
-  preloadNextState.token++;
-  preloadNextState.index = -1;
-  preloadNextState.url = null;
-  preloadNextState.isVideo = false;
-  preloadNextState.ready = false;
-  preloadNextState.loading = false;
-  preloadNextState.imageEl = null;
-  if (preloadNextState.videoEl) {
-    try {
-      preloadNextState.videoEl.pause();
-      preloadNextState.videoEl.removeAttribute("src");
-      preloadNextState.videoEl.load();
-    } catch {}
-    preloadNextState.videoEl = null;
-  }
-  if (preloadNextState.blobUrl) {
-    try { URL.revokeObjectURL(preloadNextState.blobUrl); } catch {}
-    preloadNextState.blobUrl = null;
-  }
-}
-
-async function preloadNextItemBuffer(currentIdx) {
-  if (!playlist || playlist.length < 2) return;
-
-  const nextIndex = (currentIdx + 1) % playlist.length;
-  const nextItem = playlist[nextIndex];
-  if (!nextItem) return;
-
-  const nextUrl = pickSourceForOrientation(nextItem);
-  if (!nextUrl) return;
-
-  const nextIsVideo = isVideoMediaItem(nextItem, nextUrl);
-
-  if (
-    preloadNextState.ready &&
-    preloadNextState.index === nextIndex &&
-    preloadNextState.url === nextUrl &&
-    preloadNextState.isVideo === nextIsVideo
-  ) {
-    return;
-  }
-  if (
-    preloadNextState.loading &&
-    preloadNextState.index === nextIndex &&
-    preloadNextState.url === nextUrl &&
-    preloadNextState.isVideo === nextIsVideo
-  ) {
-    return;
-  }
-
-  clearPreloadNextState();
-  const myToken = ++preloadNextState.token;
-  preloadNextState.index = nextIndex;
-  preloadNextState.url = nextUrl;
-  preloadNextState.isVideo = nextIsVideo;
-  preloadNextState.loading = true;
-
-  try {
-    if (!nextIsVideo) {
-      const preloadImg = new Image();
-      preloadImg.decoding = "async";
-      await new Promise((resolve, reject) => {
-        preloadImg.onload = () => resolve();
-        preloadImg.onerror = reject;
-        preloadImg.src = nextUrl;
-      });
-      if (myToken !== preloadNextState.token) return;
-      preloadNextState.imageEl = preloadImg;
-      preloadNextState.ready = true;
-      return;
-    }
-
-    const preloadVideo = document.createElement("video");
-    preloadVideo.muted = true;
-    preloadVideo.playsInline = true;
-    preloadVideo.preload = "auto";
-    preloadVideo.setAttribute("crossorigin", "anonymous");
-
-    let preloadUrl = nextUrl;
-    if (!/\.m3u8(\?|$)/i.test(nextUrl)) {
-      const cacheKey = `${codigoAtual}::${nextUrl}`;
-      let cachedBlob = await idbGet(cacheKey);
-      if (!cachedBlob && navigator.onLine) {
-        try {
-          const resp = await fetch(nextUrl, { cache: "force-cache" });
-          if (resp.ok) {
-            cachedBlob = await resp.blob();
-            idbSet(cacheKey, cachedBlob).catch(() => {});
-          }
-        } catch {}
-      }
-      if (cachedBlob) {
-        preloadUrl = URL.createObjectURL(cachedBlob);
-        preloadNextState.blobUrl = preloadUrl;
-      }
-    }
-
-    preloadVideo.src = preloadUrl;
-    preloadVideo.load();
-  const ok = await waitForVideoReady(preloadVideo, 8000);
-    if (myToken !== preloadNextState.token) return;
-    if (!ok) return;
-
-    preloadNextState.videoEl = preloadVideo;
-    preloadNextState.ready = true;
-  } catch {
-    // Ignorar erros de preload: o fluxo normal segue funcionando.
-  } finally {
-    if (myToken === preloadNextState.token) {
-      preloadNextState.loading = false;
-    }
-  }
-}
-
-async function warmUpcomingVideoCache(currentIdx, lookahead = 2) {
-  if (!navigator.onLine || !playlist || playlist.length < 2) return;
-  try {
-    for (let step = 1; step <= lookahead; step++) {
-      const idx = (currentIdx + step) % playlist.length;
-      const it = playlist[idx];
-      if (!it) continue;
-      const url = pickSourceForOrientation(it);
-      if (!url) continue;
-      if (!isVideoMediaItem(it, url) || /\.m3u8(\?|$)/i.test(url)) continue;
-
-      const key = `${codigoAtual}::${url}`;
-      const exists = await idbGet(key);
-      if (exists) continue;
-
-      const resp = await fetch(url, { cache: "force-cache" });
-      if (!resp.ok) continue;
-      const blob = await resp.blob();
-      await idbSet(key, blob);
-    }
-  } catch {
-    // best-effort
-  }
-}
-
-let transitionSnapshotCanvas = null;
-let transitionSnapshotCtx = null;
-let transitionSnapshotUrl = null;
-
-function clearTransitionSnapshotUrl() {
-  if (transitionSnapshotUrl) {
-    try { URL.revokeObjectURL(transitionSnapshotUrl); } catch {}
-    transitionSnapshotUrl = null;
-  }
-}
-
-async function captureTransitionSnapshotAsync() {
-  try {
-    const sourceW = video.videoWidth || video.clientWidth || 0;
-    const sourceH = video.videoHeight || video.clientHeight || 0;
-    if (!sourceW || !sourceH) return false;
-
-    const MAX_SNAPSHOT_WIDTH = 640;
-    const scale = sourceW > MAX_SNAPSHOT_WIDTH ? (MAX_SNAPSHOT_WIDTH / sourceW) : 1;
-    const targetW = Math.max(1, Math.round(sourceW * scale));
-    const targetH = Math.max(1, Math.round(sourceH * scale));
-
-    if (!transitionSnapshotCanvas) {
-      transitionSnapshotCanvas = document.createElement("canvas");
-      transitionSnapshotCtx = transitionSnapshotCanvas.getContext("2d");
-    }
-    if (!transitionSnapshotCtx) return false;
-
-    transitionSnapshotCanvas.width = targetW;
-    transitionSnapshotCanvas.height = targetH;
-    transitionSnapshotCtx.drawImage(video, 0, 0, targetW, targetH);
-
-    if (!transitionSnapshotCanvas.toBlob) {
-      img.src = transitionSnapshotCanvas.toDataURL("image/jpeg", 0.6);
-      img.style.display = "block";
-      return true;
-    }
-
-    const blob = await new Promise((resolve) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(null);
-      }, 150);
-      transitionSnapshotCanvas.toBlob((b) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(b || null);
-      }, "image/jpeg", 0.6);
-    });
-
-    if (!blob) return false;
-    clearTransitionSnapshotUrl();
-    transitionSnapshotUrl = URL.createObjectURL(blob);
-    img.src = transitionSnapshotUrl;
-    img.style.display = "block";
-    return true;
-  } catch (err) {
-    console.warn("⚠️ Não foi possível capturar frame para transição:", err);
-    return false;
-  }
 }
 
 async function tocarLoop() {
-  // Duplo buffer A/B
   if (!playlist.length) {
-  videoEls[0].style.display = "none";
-  videoEls[1].style.display = "none";
+    video.style.display = "none";
     img.style.display = "none";
     isPlaying = false;
     isLoadingVideo = false;
@@ -2409,12 +2006,11 @@ async function tocarLoop() {
   }
 
   if (isLoadingVideo) {
-    isLoadingVideo = false;
+    isLoadingVideo = false; // reseta se ficou preso
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
-  videoEls[0].onended = null;
-  videoEls[1].onended = null;
+  video.onended = null;
   img.onload = null;
   img.onerror = null;
 
@@ -2424,20 +2020,46 @@ async function tocarLoop() {
 
   const itemUrl = pickSourceForOrientation(item);
   currentItemUrl = itemUrl;
-  const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
-  const isVideo = isVideoMediaItem(item, itemUrl);
-  preloadNextItemBuffer(currentIndex).catch(() => {});
 
-  // Alternância entre vídeos
-  const activeVideo = getActiveVideo();
-  const inactiveVideo = getInactiveVideo();
-  const wasVideo = activeVideo.style.display === "block";
+  const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
+  const isVideo = isHls ||
+    (item.tipo || "").toLowerCase().includes("vídeo") ||
+    (item.tipo || "").toLowerCase().includes("video") ||
+    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
+
+  // NÃO esconder o conteúdo atual ainda - vamos carregar o próximo primeiro
+  // Isso evita a "piscada" entre conteúdos
+  const wasVideo = video.style.display === "block";
   const wasImage = img.style.display === "block";
+  
+  // se estamos trocando de um vídeo para outro, o elemento "video" vai
+  // perder o frame atual assim que alterarmos o src, o que gera a tal
+  // "tela preta" antes de o novo vídeo carregar. para evitar isso, capturamos
+  // um snapshot do frame atual e exibimos no <img> auxiliar até o próximo
+  // vídeo estar pronto.
+  if (wasVideo && !wasImage) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || video.clientWidth;
+      canvas.height = video.videoHeight || video.clientHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      img.src = canvas.toDataURL('image/png');
+      img.style.display = 'block';
+      // mostramos imediatamente o snapshot; não o escondemos com hidden-ready
+    } catch (err) {
+      console.warn('⚠️ Não foi possível capturar frame para transição:', err);
+    }
+  }
 
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
+  
+  // Preparar elementos para o próximo conteúdo (mas manter o atual visível)
+  // Só vamos esconder o atual quando o próximo estiver pronto
 
   if (isVideo) {
+    // Guard contra carregamentos concorrentes
     if (isLoadingVideo) {
       setTimeout(() => tocarLoop(), 1500);
       return;
@@ -2446,130 +2068,17 @@ async function tocarLoop() {
     currentVideoToken++;
     const videoToken = currentVideoToken;
 
-    // Carregar vídeo no elemento inativo
-    inactiveVideo.setAttribute("crossorigin", "anonymous");
-    inactiveVideo.preload = "auto";
-    inactiveVideo.src = itemUrl;
-    inactiveVideo.load();
-
-    // Esperar até o vídeo estar pronto para exibir
-    const ok = await waitForVideoReady(inactiveVideo, 8000);
-    if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; return; }
-    if (!ok || inactiveVideo.readyState < 3) {
-      isLoadingVideo = false;
-      proximoItem();
-      return;
-    }
-
-    // Esconder imagem
-    img.style.display = "none";
-    img.classList.remove("hidden-ready");
-    clearTransitionSnapshotUrl();
-    img.src = "";
-
-    // Esconder vídeo ativo
-    activeVideo.style.display = "none";
-    activeVideo.classList.remove("hidden-ready");
-    activeVideo.pause();
-    activeVideo.removeAttribute("src");
-    activeVideo.load();
-
-    // Mostrar vídeo inativo (agora ativo)
-    inactiveVideo.style.display = "block";
-    inactiveVideo.classList.remove("hidden-ready");
-    inactiveVideo.style.opacity = "1";
-    isPlaying = true;
-    videoRetryCount = 0;
-    isLoadingVideo = false;
-
-    inactiveVideo.play().catch((e) => {
-      inactiveVideo.muted = true;
-      inactiveVideo.play().catch(() => proximoItem());
-    });
-
-    // Trocar referência de ativo
-    swapActiveVideo();
-
-    // onended para avançar
-    inactiveVideo.onended = async () => {
-      isPlaying = false;
-      const mudou = await verificarCodigoDispositivoAoCiclo();
-      if (mudou) return;
-      if (pendingResync) {
-        pendingResync = false;
-        await carregarConteudo(currentPlaylistId || codigoAtual);
-      }
-      proximoItem();
-    };
-  } else {
-    const canUsePreloadedImage =
-      preloadNextState.ready &&
-      !preloadNextState.isVideo &&
-      preloadNextState.url === itemUrl &&
-      preloadNextState.imageEl;
-
-    img.onload = () => {
-      if (myToken !== playToken) return;
-
-      const fit = item.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
-      const focus = item.focus || "center center";
-      applyFit(img, fit, focus);
-
-      if (wasVideo) {
-        try {
-          activeVideo.pause();
-          activeVideo.currentTime = 0;
-          activeVideo.removeAttribute("src");
-          activeVideo.load();
-        } catch {}
-      }
-
-      activeVideo.style.display = "none";
-      activeVideo.classList.remove("hidden-ready");
-      img.style.display = "block";
-      img.classList.remove("hidden-ready");
-      img.style.opacity = "1";
-      isPlaying = true;
-
-      if (typeof duration === "number" && duration > 0) {
-        img.timeoutId = setTimeout(async () => {
-          isPlaying = false;
-          const mudou = await verificarCodigoDispositivoAoCiclo();
-          if (mudou) return;
-          if (pendingResync) {
-            pendingResync = false;
-            await carregarConteudo(currentPlaylistId || codigoAtual);
-          }
-          proximoItem();
-        }, duration);
-      }
-    };
-
-    img.onerror = () => {
-      isPlaying = false;
-      proximoItem();
-    };
-
-    clearTransitionSnapshotUrl();
-    if (canUsePreloadedImage) {
-      img.src = preloadNextState.imageEl.src || itemUrl;
-      clearPreloadNextState();
-    } else {
-      img.src = itemUrl;
-    }
-  }
-}
-
-/*
     // Timeout adaptativo baseado na velocidade de rede detectada
-    const safetyTimeoutMs = networkSpeed === 'slow' ? 20000 : networkSpeed === 'fast' ? 7000 : 9000;
+    // Usar timeout maior se internet lenta foi detectada anteriormente
+    const safetyTimeoutMs = networkSpeed === 'slow' ? 45000 : networkSpeed === 'fast' ? 10000 : 15000;
     const safetyTimeout = setTimeout(() => {
       if (isLoadingVideo) {
         console.warn("⚠️ Timeout de segurança no carregamento de vídeo (", safetyTimeoutMs, "ms, velocidade:", networkSpeed, ")");
         isLoadingVideo = false;
       }
     }, safetyTimeoutMs);
-
+    
+    // Detectar velocidade em background para próxima vez (não bloqueia)
     detectNetworkSpeed().catch(() => {});
 
     try {
@@ -2610,7 +2119,6 @@ async function tocarLoop() {
           if (wasImage || wasVideo) {
             img.style.display = "none";
             img.classList.remove("hidden-ready");
-            clearTransitionSnapshotUrl();
             img.src = "";
           }
           
@@ -2652,7 +2160,6 @@ async function tocarLoop() {
             if (wasImage || wasVideo) {
               img.style.display = "none";
               img.classList.remove("hidden-ready");
-              clearTransitionSnapshotUrl();
               img.src = "";
             }
             
@@ -2712,7 +2219,6 @@ async function tocarLoop() {
           if (wasImage || wasVideo) {
             img.style.display = "none";
             img.classList.remove("hidden-ready");
-            clearTransitionSnapshotUrl();
             img.src = "";
           }
           
@@ -2736,85 +2242,52 @@ async function tocarLoop() {
 
         // Verificar se o vídeo está no cache (tanto online quanto offline)
         try {
-          let loadedFromPreload = false;
-          const canUsePreloadedVideo =
-            preloadNextState.ready &&
-            preloadNextState.isVideo &&
-            preloadNextState.url === itemUrl &&
-            preloadNextState.videoEl;
-
-          if (canUsePreloadedVideo) {
-            const preloadSrc =
-              preloadNextState.videoEl.currentSrc ||
-              preloadNextState.videoEl.src ||
-              itemUrl;
-            const preloadReady = preloadNextState.videoEl.readyState >= 3;
-            if (preloadReady) {
-              // Fast-path real: sem espera/await para trocar imediatamente.
-              video.src = preloadSrc;
-              if (preloadNextState.blobUrl && preloadSrc === preloadNextState.blobUrl) {
-                const keepBlobUrl = preloadNextState.blobUrl;
-                preloadNextState.blobUrl = null; // transfere ownership para player principal
-                const cleanupBlob = () => {
-                  try { URL.revokeObjectURL(keepBlobUrl); } catch {}
-                };
-                video.addEventListener('ended', cleanupBlob, { once: true });
-                video.addEventListener('loadstart', () => {
-                  if (video.src !== keepBlobUrl) cleanupBlob();
-                }, { once: true });
-              }
-              clearPreloadNextState();
-              loadedFromPreload = true;
-            }
-          }
-
-          if (!loadedFromPreload) {
-            const cacheKey = `${codigoAtual}::${itemUrl}`;
-            const cachedBlob = await idbGet(cacheKey);
+          const cacheKey = `${codigoAtual}::${itemUrl}`;
+          const cachedBlob = await idbGet(cacheKey);
+          
+          if (cachedBlob) {
+            console.log("📦 Carregando vídeo do cache:", itemUrl, "tamanho:", (cachedBlob.size / 1024 / 1024).toFixed(2), "MB");
+            // Criar URL do blob para o vídeo
+            const blobUrl = URL.createObjectURL(cachedBlob);
+            video.src = blobUrl;
+            video.load();
             
-            if (cachedBlob) {
-              console.log("📦 Carregando vídeo do cache:", itemUrl, "tamanho:", (cachedBlob.size / 1024 / 1024).toFixed(2), "MB");
-              // Criar URL do blob para o vídeo
-              const blobUrl = URL.createObjectURL(cachedBlob);
-              video.src = blobUrl;
-              video.load();
-              
-              // Limpar URL do blob quando o vídeo terminar ou quando mudar de vídeo
-              const cleanupBlob = () => {
-                URL.revokeObjectURL(blobUrl);
-              };
-              video.addEventListener('ended', cleanupBlob, { once: true });
-              video.addEventListener('loadstart', () => {
-                // Se o vídeo mudar antes de terminar, limpar o blob anterior
-                if (video.src !== blobUrl) {
-                  cleanupBlob();
-                }
-              }, { once: true });
-              
-              const ok = await waitForVideoReady(video, 8000);
-              if (myToken !== playToken || videoToken !== currentVideoToken) { 
+            // Limpar URL do blob quando o vídeo terminar ou quando mudar de vídeo
+            const cleanupBlob = () => {
+              URL.revokeObjectURL(blobUrl);
+            };
+            video.addEventListener('ended', cleanupBlob, { once: true });
+            video.addEventListener('loadstart', () => {
+              // Se o vídeo mudar antes de terminar, limpar o blob anterior
+              if (video.src !== blobUrl) {
                 cleanupBlob();
-                isLoadingVideo = false; 
-                clearTimeout(safetyTimeout); 
-                return; 
               }
-              if (!ok || video.readyState < 3) {
-                console.error("Vídeo do cache não ficou pronto (readyState:", video.readyState, ")");
-                cleanupBlob();
-                isLoadingVideo = false; 
-                clearTimeout(safetyTimeout);
-                
-                // Limpar elementos se falhou
-                if (wasImage) {
-                  img.style.display = "block";
-                } else if (wasVideo) {
-                  video.style.display = "block";
-                }
-                
-                proximoItem(); 
-                return;
+            }, { once: true });
+            
+            const ok = await waitForVideoReady(video, 8000);
+            if (myToken !== playToken || videoToken !== currentVideoToken) { 
+              cleanupBlob();
+              isLoadingVideo = false; 
+              clearTimeout(safetyTimeout); 
+              return; 
+            }
+            if (!ok || video.readyState < 3) {
+              console.error("Vídeo do cache não ficou pronto (readyState:", video.readyState, ")");
+              cleanupBlob();
+              isLoadingVideo = false; 
+              clearTimeout(safetyTimeout);
+              
+              // Limpar elementos se falhou
+              if (wasImage) {
+                img.style.display = "block";
+              } else if (wasVideo) {
+                video.style.display = "block";
               }
-            } else {
+              
+              proximoItem(); 
+              return;
+            }
+          } else {
             // Vídeo não está no cache - usar URL original
             if (!navigator.onLine) {
               console.warn("⚠️ Vídeo não encontrado no cache offline:", itemUrl);
@@ -2851,7 +2324,6 @@ async function tocarLoop() {
                     if (wasImage || wasVideo) {
                       img.style.display = "none";
                       img.classList.remove("hidden-ready");
-                      clearTransitionSnapshotUrl();
                       img.src = "";
                     }
                     
@@ -2883,7 +2355,6 @@ async function tocarLoop() {
               proximoItem(); 
               return;
             }
-          }
           }
         } catch (error) {
           console.error("Erro ao carregar vídeo do cache:", error);
@@ -2919,7 +2390,6 @@ async function tocarLoop() {
         if (wasImage || wasVideo) {
           img.style.display = "none";
           img.classList.remove("hidden-ready");
-          clearTransitionSnapshotUrl();
           img.src = "";
         }
         
@@ -2932,13 +2402,38 @@ async function tocarLoop() {
         videoRetryCount = 0;
         isLoadingVideo = false;
         clearTimeout(safetyTimeout);
-        proximoItem();
-        return;
+        
+        video.play().catch((playError) => {
+          console.error("Erro ao reproduzir vídeo:", playError);
+          video.muted = true;
+          video.play().catch(() => {
+            isLoadingVideo = false;
+            clearTimeout(safetyTimeout);
+            proximoItem();
+          });
+        });
       }
 
+      video.onended = async () => {
+        isPlaying = false;
+        
+        // Verificar código ao final do vídeo
+        const mudou = await verificarCodigoDispositivoAoCiclo();
+        if (mudou) {
+          return; // Se mudou, carregarConteudo já foi chamado
+        }
+        
+        if (pendingResync) {
+          pendingResync = false;
+          await carregarConteudo(currentPlaylistId || codigoAtual);
+        }
+        proximoItem();
+      };
     } catch (e) {
+      console.error("Erro no vídeo:", e, "URL:", itemUrl, "tipo:", item.tipo);
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
+
       if (videoRetryCount < MAX_VIDEO_RETRIES) {
         videoRetryCount++;
         setTimeout(() => tocarLoop(), 1500);
@@ -2950,12 +2445,6 @@ async function tocarLoop() {
     }
   } else {
     // ---- IMAGEM ----
-    const canUsePreloadedImage =
-      preloadNextState.ready &&
-      !preloadNextState.isVideo &&
-      preloadNextState.url === itemUrl &&
-      preloadNextState.imageEl;
-
     img.onload = () => {
       if (myToken !== playToken) return;
 
@@ -2966,16 +2455,16 @@ async function tocarLoop() {
       // Limpar vídeo anterior se estava tocando
       if (wasVideo) {
         try { 
-          activeVideo.pause(); 
-          activeVideo.currentTime = 0;
-          activeVideo.removeAttribute("src");
-          activeVideo.load();
+          video.pause(); 
+          video.currentTime = 0;
+          video.removeAttribute("src");
+          video.load();
         } catch {}
       }
       
       // Esconder vídeo ANTES de mostrar imagem (transição suave)
-      activeVideo.style.display = "none";
-      activeVideo.classList.remove("hidden-ready");
+      video.style.display = "none";
+      video.classList.remove("hidden-ready");
       
       // Mostrar imagem e garantir que está visível
       img.style.display = "block";
@@ -3007,17 +2496,9 @@ async function tocarLoop() {
       proximoItem();
     };
 
-    if (canUsePreloadedImage) {
-      clearTransitionSnapshotUrl();
-      img.src = preloadNextState.imageEl.src || itemUrl;
-      clearPreloadNextState();
-    } else {
-      clearTransitionSnapshotUrl();
-      img.src = itemUrl;
-    }
+    img.src = itemUrl;
   }
 }
-*/
 
 
 // ===== Detectar velocidade de rede =====
@@ -3394,32 +2875,45 @@ function proximoItem() {
   // Ao fim de cada ciclo, verificar se código mudou na tabela dispositivos
   if (cicloCompleto && navigator.onLine) {
     console.log("🔄 Ciclo completo finalizado, verificando código do dispositivo...");
-
-    // Não bloquear a transição visual; sincronização roda em background.
-    const indiceParaContinuar = currentIndex; // início do próximo ciclo
-    const playlistIdParaSync = currentPlaylistId;
-
-    setTimeout(() => {
-      verificarCodigoDispositivoAoCiclo().then((mudou) => {
-        if (mudou) return; // carregarConteudo já executado
-        if (!playlistIdParaSync) return;
-
-        console.log("🔄 Recarregando playlist do banco (background)...");
-        carregarConteudo(playlistIdParaSync).then(() => {
+    
+    verificarCodigoDispositivoAoCiclo().then((mudou) => {
+      if (mudou) {
+        // Se mudou, carregarConteudo já foi chamado, não precisa continuar
+        return;
+      }
+      
+      // Se não mudou, continuar com verificação de playlist
+      if (currentPlaylistId) {
+        console.log("🔄 Recarregando playlist do banco...");
+        // Preservar o índice atual para continuar do mesmo ponto após recarregar
+        const indiceParaContinuar = currentIndex; // que será 0 (início do próximo ciclo)
+        
+        // Recarregar conteúdo do banco para pegar mudanças na playlist
+        carregarConteudo(currentPlaylistId).then(() => {
+          console.log("✅ Playlist recarregada, cache será atualizado se houver mudanças");
+          // Garantir que o índice esteja válido após recarregar
           if (playlist.length > 0) {
             currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
-            if (!isPlaying && !isLoadingVideo) {
+            // Se a playlist não mudou, continuar do início normalmente
+            // Se mudou, atualizarPlaylist já ajustou o índice corretamente
+            if (!isPlaying) {
               tocarLoop();
             }
           }
         }).catch(err => {
-          console.error("❌ Erro ao recarregar playlist em background:", err);
+          console.error("❌ Erro ao recarregar playlist:", err);
+          // Continuar mesmo se houver erro
+          if (playlist.length > 0) {
+            currentIndex = Math.min(indiceParaContinuar, playlist.length - 1);
+            tocarLoop();
+          }
         });
-      }).catch(() => {});
-    }, 0);
-
-    tocarLoop();
-    return;
+      } else {
+        // Conteúdo único, apenas continuar
+        tocarLoop();
+      }
+    });
+    return; // Não chamar tocarLoop aqui, será chamado dentro do then
   }
   
   tocarLoop();
@@ -3451,12 +2945,12 @@ function subscribePlaylistChannel(playlistId) {
           destroyHls();
           if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
           isPlaying = false;
-          await carregarConteudo(playlistId);
+          await carregarConteudo(currentPlaylistId);
           proximoItem();
           return;
         }
 
-        await carregarConteudo(playlistId);
+        await carregarConteudo(currentPlaylistId);
       }
     )
     .subscribe();
@@ -3768,17 +3262,15 @@ async function verificarMudancaDispositivo() {
 
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
-  // Parar e esconder todos os vídeos (A/B)
-  for (const v of videoEls) {
-    if (!v) continue;
-    try {
-      v.pause();
-      v.currentTime = 0;
-      v.removeAttribute("src");
-      v.load();
+  // Parar e esconder vídeo
+  if (video) {
+    try { 
+      video.pause(); 
+      video.currentTime = 0;
+      video.removeAttribute("src");
+      video.load();
     } catch {}
-    v.style.display = "none";
-    v.classList.remove("hidden-ready");
+    video.style.display = "none";
   }
   
   // Destruir HLS
@@ -3786,7 +3278,6 @@ async function pararTudoMostrarLogin() {
   
   // Esconder imagem
   if (img) {
-    clearTransitionSnapshotUrl();
     img.src = "";
     img.style.display = "none";
     if (img.timeoutId) {
@@ -3807,7 +3298,6 @@ async function pararTudoMostrarLogin() {
   currentIndex = 0;
   currentItemUrl = null;
   isPlaying = false;
-  clearPreloadNextState();
   
   // Limpar promoção
   fecharPopupPromocao();
@@ -3826,6 +3316,7 @@ async function pararTudoMostrarLogin() {
 // ===== Função para verificar se o player está ativo (não está na tela de login) =====
 function isPlayerAtivo() {
   const codigoInput = document.getElementById("codigoInput");
+  const video = document.getElementById("videoPlayer");
   const img = document.getElementById("imgPlayer");
   
   // Se o campo de código está visível, o player NÃO está ativo
@@ -3837,10 +3328,7 @@ function isPlayerAtivo() {
   }
   
   // Se vídeo ou imagem estão visíveis, o player está ativo
-  if (videoEls[0] && videoEls[0].style.display !== 'none') {
-    return true;
-  }
-  if (videoEls[1] && videoEls[1].style.display !== 'none') {
+  if (video && video.style.display !== 'none') {
     return true;
   }
   if (img && img.style.display !== 'none') {
@@ -4010,14 +3498,14 @@ function mostrarLogin() {
     }
   }
   
-  // Garantir que vídeos A/B e imagem estejam escondidos e com z-index baixo
+  // Garantir que vídeo e imagem estejam escondidos e com z-index baixo
+  const video = document.getElementById("videoPlayer");
   const img = document.getElementById("imgPlayer");
-  for (const v of videoEls) {
-    if (!v) continue;
-    v.style.display = "none";
-    v.style.zIndex = "-1";
-    v.style.opacity = "0";
-    try { v.pause(); } catch {}
+  if (video) {
+    video.style.display = "none";
+    video.style.zIndex = "-1";
+    video.style.opacity = "0";
+    try { video.pause(); } catch {}
   }
   if (img) {
     img.style.display = "none";
@@ -4228,186 +3716,130 @@ if ('serviceWorker' in navigator) {
 
 // ===== UI Events / Heartbeat / Unlock =====
 
-async function enviarPingOnlineImediato() {
-  if (!codigoAtual || !navigator.onLine) return;
-  const nowIso = new Date().toISOString();
-  try {
-    const updateData = {
-      status_tela: "Online",
-      last_ping: nowIso,
-      device_last_seen: nowIso
-    };
-    try {
-      updateData.device_id = gerarDeviceId();
-    } catch {}
-
-    await client
-      .from("displays")
-      .update(updateData)
-      .eq("codigo_unico", codigoAtual);
-  } catch (err) {
-    if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
-      try {
-        await client
-          .from("displays")
-          .update({
-            status_tela: "Online",
-            last_ping: nowIso
-          })
-          .eq("codigo_unico", codigoAtual);
-      } catch {}
-    }
-  }
-}
-
-async function tratarRetornoOnline(origem = "online-event") {
-  if (!codigoAtual || !navigator.onLine) return;
-  console.log(`🌐 Conexão restabelecida (${origem}) - sincronizando imediatamente`);
-  await enviarPingOnlineImediato();
-
-  try {
-    const deviceId = gerarDeviceId();
-    
-    // Buscar com device_id para verificar se é o mesmo dispositivo
-    let { data, error } = await client
-      .from("displays")
-      .select("is_locked,device_id")
-      .eq("codigo_unico", codigoAtual)
-      .maybeSingle();
-    
-    // Se não encontrou device_id, tentar sem ele (retrocompatibilidade)
-    if (error && error.message && error.message.includes('column') && error.message.includes('does not exist')) {
-      const { data: dataBasica } = await client
-        .from("displays")
-        .select("is_locked")
-        .eq("codigo_unico", codigoAtual)
-        .maybeSingle();
-      data = dataBasica;
-    }
-
-    if (data) {
-      const mesmoDispositivo = data.device_id && data.device_id === deviceId;
-      
-      // Se is_locked = false, significa que exibição foi parada - limpar tudo
-      if (data.is_locked === false) {
-        console.log("⏸️ Display desbloqueado ao voltar online (is_locked = false), parando exibição...");
-        
-        // Desativar dispositivo
-        await client
-          .from("dispositivos")
-          .update({ is_ativo: false })
-          .eq("device_id", deviceId);
-        
-        // Limpar localStorage
-        localStorage.removeItem(CODIGO_DISPLAY_KEY);
-        localStorage.removeItem(LOCAL_TELA_KEY);
-        
-        // Parar tudo e mostrar tela de login
-        await pararTudoMostrarLogin();
-        return;
-      }
-      
-      // Se está locked e é o mesmo dispositivo, garantir lock
-      if (mesmoDispositivo) {
-        const updateData = { 
-          is_locked: true, 
-          status: "Em uso",
-          device_id: deviceId,
-          device_last_seen: new Date().toISOString()
-        };
-        
-        try {
-          await client
-            .from("displays")
-            .update(updateData)
-            .eq("codigo_unico", codigoAtual);
-        } catch (updateErr) {
-          // Se campos não existirem, fazer update sem eles
-          if (updateErr.message && updateErr.message.includes('column') && updateErr.message.includes('does not exist')) {
-            await client
-              .from("displays")
-              .update({ is_locked: true, status: "Em uso" })
-              .eq("codigo_unico", codigoAtual);
-          }
-        }
-      }
-    }
-  } catch {}
-
-  if (!realtimeReady) {
-    iniciarRealtime();
-    realtimeReady = true;
-  }
-
-  if (isPlaying) {
-    pendingResync = true;
-  } else if (codigoAtual) {
-    await carregarConteudo(currentPlaylistId || codigoAtual);
-  }
-}
-
-async function checarConectividadeOffline() {
-  if (navigator.onLine) return true;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000);
-  try {
-    // no-cors permite apenas validar conectividade de rede sem depender de CORS.
-    await fetch(`${supabaseUrl}/rest/v1/`, {
-      method: "GET",
-      mode: "no-cors",
-      cache: "no-store",
-      signal: controller.signal
-    });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-function iniciarMonitorReconexao() {
-  if (reconnectMonitorTimer) return;
-  reconnectMonitorTimer = setInterval(async () => {
-    const onlineAgora = navigator.onLine;
-    if (onlineAgora !== lastKnownOnlineState) {
-      lastKnownOnlineState = onlineAgora;
-      if (onlineAgora) {
-        if (onlineDebounceId) clearTimeout(onlineDebounceId);
-        onlineDebounceId = setTimeout(() => tratarRetornoOnline("monitor-transition"), 300);
-      }
-      return;
-    }
-
-    // Fallback: enquanto offline, testa periodicamente para detectar retorno rápido.
-    if (!onlineAgora && codigoAtual) {
-      const voltou = await checarConectividadeOffline();
-      if (voltou) {
-        lastKnownOnlineState = true;
-        if (onlineDebounceId) clearTimeout(onlineDebounceId);
-        onlineDebounceId = setTimeout(() => tratarRetornoOnline("offline-probe"), 300);
-      }
-    }
-  }, 3000);
-}
-
 // Debounce do evento online
 window.addEventListener("online", () => {
-  lastKnownOnlineState = true;
   if (onlineDebounceId) clearTimeout(onlineDebounceId);
-  onlineDebounceId = setTimeout(() => tratarRetornoOnline("online-event"), 1200);
-});
+  onlineDebounceId = setTimeout(async () => {
+    if (codigoAtual) {
+      try {
+        const deviceId = gerarDeviceId();
+        
+        // Buscar com device_id para verificar se é o mesmo dispositivo
+        let { data, error } = await client
+          .from("displays")
+          .select("is_locked,device_id")
+          .eq("codigo_unico", codigoAtual)
+          .maybeSingle();
+        
+        // Se não encontrou device_id, tentar sem ele (retrocompatibilidade)
+        if (error && error.message && error.message.includes('column') && error.message.includes('does not exist')) {
+          const { data: dataBasica } = await client
+            .from("displays")
+            .select("is_locked")
+            .eq("codigo_unico", codigoAtual)
+            .maybeSingle();
+          data = dataBasica;
+        }
 
-window.addEventListener("offline", () => {
-  lastKnownOnlineState = false;
-  console.log("📴 Conexão perdida - player seguirá com cache local e monitorando retorno");
-});
+        if (data) {
+          const mesmoDispositivo = data.device_id && data.device_id === deviceId;
+          
+          // Se is_locked = false, significa que exibição foi parada - limpar tudo
+          if (data.is_locked === false) {
+            console.log("⏸️ Display desbloqueado ao voltar online (is_locked = false), parando exibição...");
+            
+            // Desativar dispositivo
+            await client
+              .from("dispositivos")
+              .update({ is_ativo: false })
+              .eq("device_id", deviceId);
+            
+            // Limpar localStorage
+            localStorage.removeItem(CODIGO_DISPLAY_KEY);
+            localStorage.removeItem(LOCAL_TELA_KEY);
+            
+            // Parar tudo e mostrar tela de login
+            await pararTudoMostrarLogin();
+            return;
+          }
+          
+          // Se está locked e é o mesmo dispositivo, garantir lock
+          if (mesmoDispositivo) {
+            const updateData = { 
+              is_locked: true, 
+              status: "Em uso",
+              device_id: deviceId,
+              device_last_seen: new Date().toISOString()
+            };
+            
+            try {
+              await client
+                .from("displays")
+                .update(updateData)
+                .eq("codigo_unico", codigoAtual);
+            } catch (updateErr) {
+              // Se campos não existirem, fazer update sem eles
+              if (updateErr.message && updateErr.message.includes('column') && updateErr.message.includes('does not exist')) {
+                await client
+                  .from("displays")
+                  .update({ is_locked: true, status: "Em uso" })
+                  .eq("codigo_unico", codigoAtual);
+              }
+            }
+          }
+        }
+      } catch {}
+    }
 
-iniciarMonitorReconexao();
+    if (!realtimeReady) {
+      iniciarRealtime();
+      realtimeReady = true;
+    }
+
+    if (isPlaying) {
+      pendingResync = true;
+    } else if (codigoAtual) {
+      await carregarConteudo(currentPlaylistId || codigoAtual);
+    }
+  }, 1200);
+});
 
 setInterval(async () => {
   if (codigoAtual && navigator.onLine) {
-    await enviarPingOnlineImediato();
+    try {
+      // Atualização básica (sempre funciona)
+      const updateData = { 
+        status_tela: "Online", 
+        last_ping: new Date().toISOString()
+      };
+      
+      // Tentar adicionar campos de dispositivo (opcional)
+      try {
+        const deviceId = gerarDeviceId();
+        updateData.device_id = deviceId;
+        updateData.device_last_seen = new Date().toISOString();
+      } catch {
+        // Ignorar se device_id não puder ser gerado
+      }
+      
+      await client
+        .from("displays")
+        .update(updateData)
+        .eq("codigo_unico", codigoAtual);
+    } catch (err) {
+      // Se erro for de coluna não encontrada, fazer update sem campos opcionais
+      if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
+        try {
+          await client
+            .from("displays")
+            .update({ 
+              status_tela: "Online", 
+              last_ping: new Date().toISOString()
+            })
+            .eq("codigo_unico", codigoAtual);
+        } catch {}
+      }
+    }
   }
 }, 5 * 60 * 1000);
 
