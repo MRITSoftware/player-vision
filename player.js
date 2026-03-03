@@ -76,12 +76,12 @@ const img = document.getElementById("imgPlayer");
 
 function getActiveVideo() {
   return videoEls[activeVideoIdx];
+}
 function getInactiveVideo() {
   return videoEls[1 - activeVideoIdx];
 }
 function swapActiveVideo() {
   activeVideoIdx = 1 - activeVideoIdx;
-}
 }
 
 // ===== Constantes para localStorage =====
@@ -2508,6 +2508,7 @@ async function tocarLoop() {
   }
 }
 
+/*
     // Timeout adaptativo baseado na velocidade de rede detectada
     const safetyTimeoutMs = networkSpeed === 'slow' ? 20000 : networkSpeed === 'fast' ? 7000 : 9000;
     const safetyTimeout = setTimeout(() => {
@@ -2964,6 +2965,7 @@ async function tocarLoop() {
     }
   }
 }
+*/
 
 
 // ===== Detectar velocidade de rede =====
