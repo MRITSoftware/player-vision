@@ -2035,27 +2035,6 @@ async function tocarLoop() {
   // Isso evita a "piscada" entre conteÃºdos
   const wasVideo = video.style.display === "block";
   const wasImage = img.style.display === "block";
-  
-  // se estamos trocando de um vÃ­deo para outro, o elemento "video" vai
-  // perder o frame atual assim que alterarmos o src, o que gera a tal
-  // "tela preta" antes de o novo vÃ­deo carregar. para evitar isso, capturamos
-  // um snapshot do frame atual e exibimos no <img> auxiliar atÃ© o prÃ³ximo
-  // vÃ­deo estar pronto.
-  if (wasVideo && !wasImage) {
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth || video.clientWidth;
-      canvas.height = video.videoHeight || video.clientHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      img.src = canvas.toDataURL('image/png');
-      img.style.display = 'block';
-      // mostramos imediatamente o snapshot; nÃ£o o escondemos com hidden-ready
-    } catch (err) {
-      console.warn('âš ï¸ NÃ£o foi possÃ­vel capturar frame para transiÃ§Ã£o:', err);
-    }
-  }
-
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
   
@@ -5043,4 +5022,5 @@ window.mritDebug = {
     }
   }
 };
+
 
