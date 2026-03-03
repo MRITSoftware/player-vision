@@ -149,6 +149,7 @@
   </div>
 
   <video id="videoPlayer" autoplay muted playsinline style="display:none"></video>
+  <video id="videoPlayerB" autoplay muted playsinline style="display:none"></video>
   <img id="imgPlayer" style="display:none" />
 
   <!-- Rodapé -->
@@ -271,6 +272,7 @@
     function isPlayerAtivo() {
       const codigoInput = document.getElementById("codigoInput");
       const video = document.getElementById("videoPlayer");
+      const videoB = document.getElementById("videoPlayerB");
       const img = document.getElementById("imgPlayer");
       
       // Se o campo de código está visível, o player NÃO está ativo
@@ -280,6 +282,9 @@
       
       // Se vídeo ou imagem estão visíveis, o player está ativo
       if (video && video.style.display !== 'none') {
+        return true;
+      }
+      if (videoB && videoB.style.display !== 'none') {
         return true;
       }
       if (img && img.style.display !== 'none') {

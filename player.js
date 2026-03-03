@@ -45,14 +45,21 @@ const MAX_VIDEO_RETRIES = 3;
 let isLoadingVideo = false;
 let currentVideoToken = 0;
 let cycleCheckInFlight = false;
-
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
 let promoPopup = null;
 
-const video = document.getElementById("videoPlayer");
+let video = document.getElementById("videoPlayer");
+let videoBuffer = document.getElementById("videoPlayerB") || video;
 const img = document.getElementById("imgPlayer");
+
+function getUniqueVideoEls() {
+  const out = [];
+  if (video) out.push(video);
+  if (videoBuffer && videoBuffer !== video) out.push(videoBuffer);
+  return out;
+}
 
 // ===== Constantes para localStorage =====
 const CODIGO_DISPLAY_KEY = 'mrit_display_codigo';
@@ -1988,10 +1995,12 @@ async function resetAllCachesForNewCode() {
   // pede para o SW limpar qualquer namespace ainda ativo (se houver)
   navigator.serviceWorker?.controller?.postMessage({ action: "clearNamespace" });
 
-  // zera os elementos de mÃ­dia
-  try { video.pause(); } catch {}
-  video.removeAttribute("src");
-  video.load();
+  // zera os elementos de mÃ­dia (ativo + buffer)
+  for (const v of getUniqueVideoEls()) {
+    try { v.pause(); } catch {}
+    v.removeAttribute("src");
+    v.load();
+  }
   img.src = "";
   
   // Marcar cache como nÃ£o pronto ao trocar de cÃ³digo
@@ -2002,19 +2011,15 @@ async function resetAllCachesForNewCode() {
 
 async function tocarLoop() {
   if (!playlist.length) {
-    video.style.display = "none";
+    for (const v of getUniqueVideoEls()) v.style.display = "none";
     img.style.display = "none";
     isPlaying = false;
     isLoadingVideo = false;
     return;
   }
 
-  if (isLoadingVideo) {
-    isLoadingVideo = false; // reseta se ficou preso
-  }
-
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
-  video.onended = null;
+  for (const v of getUniqueVideoEls()) v.onended = null;
   img.onload = null;
   img.onerror = null;
 
@@ -2026,376 +2031,112 @@ async function tocarLoop() {
   currentItemUrl = itemUrl;
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
-  const isVideo = isHls ||
-    (item.tipo || "").toLowerCase().includes("vÃ­deo") ||
-    (item.tipo || "").toLowerCase().includes("video") ||
+  const isVideo = isHls || (item.tipo || "").toLowerCase().includes("video") ||
     /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
 
-  // NÃƒO esconder o conteÃºdo atual ainda - vamos carregar o prÃ³ximo primeiro
-  // Isso evita a "piscada" entre conteÃºdos
-  const wasVideo = video.style.display === "block";
-  const wasImage = img.style.display === "block";
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
-  
-  // Preparar elementos para o prÃ³ximo conteÃºdo (mas manter o atual visÃ­vel)
-  // SÃ³ vamos esconder o atual quando o prÃ³ximo estiver pronto
 
   if (isVideo) {
-    // Guard contra carregamentos concorrentes
-    if (isLoadingVideo) {
-      setTimeout(() => tocarLoop(), 1500);
-      return;
-    }
+    if (isLoadingVideo) { setTimeout(() => tocarLoop(), 60); return; }
+
     isLoadingVideo = true;
     currentVideoToken++;
     const videoToken = currentVideoToken;
 
-    // Timeout adaptativo baseado na velocidade de rede detectada
-    // Usar timeout maior se internet lenta foi detectada anteriormente
-    const safetyTimeoutMs = networkSpeed === 'slow' ? 45000 : networkSpeed === 'fast' ? 10000 : 15000;
-    const safetyTimeout = setTimeout(() => {
-      if (isLoadingVideo) {
-        console.warn("âš ï¸ Timeout de seguranÃ§a no carregamento de vÃ­deo (", safetyTimeoutMs, "ms, velocidade:", networkSpeed, ")");
-        isLoadingVideo = false;
-      }
-    }, safetyTimeoutMs);
-    
-    // Detectar velocidade em background para prÃ³xima vez (nÃ£o bloqueia)
-    detectNetworkSpeed().catch(() => {});
+    const previousVideo = video;
+    const nextVideo = (videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo;
+    const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 15000);
 
     try {
+      nextVideo.muted = true;
+      nextVideo.playsInline = true;
+      nextVideo.setAttribute("crossorigin", "anonymous");
+      nextVideo.preload = "auto";
+
       if (isHls) {
-        // ---- HLS ----
         destroyHls();
-        // Safari/iOS suporta nativo
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.setAttribute("crossorigin", "anonymous");
-          video.preload = "auto";
-          video.src = itemUrl;
-          video.load();
-
-          // Timeout adaptativo para internet lenta (usa velocidade jÃ¡ detectada)
-          const hlsTimeout = networkSpeed === 'slow' ? 12000 : networkSpeed === 'fast' ? 3000 : 4000;
-          const ok = await waitForVideoReady(video, hlsTimeout);
-          if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
-          if (!ok) { 
-            console.warn("âš ï¸ VÃ­deo nÃ£o ficou pronto a tempo (timeout:", hlsTimeout, "ms)");
-            isLoadingVideo = false; 
-            clearTimeout(safetyTimeout); 
-            // Tentar prÃ³ximo item apenas se nÃ£o for internet lenta (pode ser sÃ³ demorado)
-            if (networkSpeed !== 'slow') {
-              proximoItem(); 
-            } else {
-              // Internet lenta: tentar novamente apÃ³s um delay
-              console.log("â³ Internet lenta detectada, aguardando mais um pouco antes de tentar prÃ³ximo item...");
-              setTimeout(() => tocarLoop(), 2000);
-            }
-            return; 
-          }
-
-          const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
-          const focus = item.focus || "center center";
-          applyFit(video, fit, focus);
-
-          // Esconder qualquer imagem exibida ou snapshot (transiÃ§Ã£o suave)
-          if (wasImage || wasVideo) {
-            img.style.display = "none";
-            img.classList.remove("hidden-ready");
-            img.src = "";
-          }
-          
-          // Mostrar vÃ­deo e garantir que estÃ¡ visÃ­vel
-          video.style.display = "block";
-          video.classList.remove("hidden-ready");
-          video.style.opacity = "1";
-          
-          isPlaying = true;
-          videoRetryCount = 0;
-          isLoadingVideo = false;
-          clearTimeout(safetyTimeout);
-          
-          video.play().catch((e) => {
-            console.error("Erro play HLS:", e);
-            video.muted = true;
-            video.play().catch(() => proximoItem());
-          });
-          
-          // Tentar fullscreen quando vÃ­deo HLS comeÃ§ar a tocar (mÃºltiplas tentativas)
-          setTimeout(() => entrarFullscreen(), 500);
-          setTimeout(() => entrarFullscreen(), 1500);
-          setTimeout(() => entrarFullscreen(), 3000);
+        if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
+          nextVideo.src = itemUrl;
+          nextVideo.load();
+          const ok = await waitForVideoReady(nextVideo, 3000);
+          if (!ok) throw new Error("hls nativo nao pronto");
         } else if (window.Hls && window.Hls.isSupported()) {
-          hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
-          hls.loadSource(itemUrl);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (myToken !== playToken || videoToken !== currentVideoToken) return;
-
-            video.setAttribute("crossorigin", "anonymous");
-            video.preload = "auto";
-
-            const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
-            const focus = item.focus || "center center";
-            applyFit(video, fit, focus);
-
-            // Esconder qualquer imagem exibida ou snapshot (transiÃ§Ã£o suave)
-            if (wasImage || wasVideo) {
-              img.style.display = "none";
-              img.classList.remove("hidden-ready");
-              img.src = "";
-            }
-            
-            // Mostrar vÃ­deo e garantir que estÃ¡ visÃ­vel
-            video.style.display = "block";
-            video.classList.remove("hidden-ready");
-            video.style.opacity = "1";
-            
-            isPlaying = true;
-            videoRetryCount = 0;
-            isLoadingVideo = false;
-            clearTimeout(safetyTimeout);
-            
-            video.play().catch(() => { video.muted = true; video.play(); });
-          });
-          hls.on(Hls.Events.ERROR, (evt, data) => {
-            if (data.fatal) {
-              switch (data.type) {
-                case Hls.ErrorTypes.NETWORK_ERROR: hls.startLoad(); break;
-                case Hls.ErrorTypes.MEDIA_ERROR:   hls.recoverMediaError(); break;
-                default:
-                  destroyHls(); isLoadingVideo = false; clearTimeout(safetyTimeout); proximoItem();
-              }
-            }
+          hls = new Hls({ maxBufferLength: 20, maxMaxBufferLength: 40 });
+          await new Promise((resolve, reject) => {
+            let done = false;
+            const t = setTimeout(() => {
+              if (done) return;
+              done = true;
+              reject(new Error("timeout hls"));
+            }, 4000);
+            hls.loadSource(itemUrl);
+            hls.attachMedia(nextVideo);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              if (done) return;
+              done = true;
+              clearTimeout(t);
+              resolve(true);
+            });
+            hls.on(Hls.Events.ERROR, (evt, data) => {
+              if (done || !data?.fatal) return;
+              done = true;
+              clearTimeout(t);
+              reject(new Error("erro hls fatal"));
+            });
           });
         } else {
-          // fallback direto
-          video.setAttribute("crossorigin", "anonymous");
-          video.preload = "auto";
-          video.src = itemUrl;
-          video.load();
-
-          // Timeout adaptativo para internet lenta (usa velocidade jÃ¡ detectada)
-          const hlsTimeout = networkSpeed === 'slow' ? 12000 : networkSpeed === 'fast' ? 3000 : 4000;
-          const ok = await waitForVideoReady(video, hlsTimeout);
-          if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
-          if (!ok) { 
-            console.warn("âš ï¸ VÃ­deo nÃ£o ficou pronto a tempo (timeout:", hlsTimeout, "ms)");
-            isLoadingVideo = false; 
-            clearTimeout(safetyTimeout); 
-            // Tentar prÃ³ximo item apenas se nÃ£o for internet lenta (pode ser sÃ³ demorado)
-            if (networkSpeed !== 'slow') {
-              proximoItem(); 
-            } else {
-              // Internet lenta: tentar novamente apÃ³s um delay
-              console.log("â³ Internet lenta detectada, aguardando mais um pouco antes de tentar prÃ³ximo item...");
-              setTimeout(() => tocarLoop(), 2000);
-            }
-            return; 
-          }
-
-          const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
-          const focus = item.focus || "center center";
-          applyFit(video, fit, focus);
-
-          // Esconder qualquer imagem exibida ou snapshot (transiÃ§Ã£o suave)
-          if (wasImage || wasVideo) {
-            img.style.display = "none";
-            img.classList.remove("hidden-ready");
-            img.src = "";
-          }
-          
-          // Mostrar vÃ­deo e garantir que estÃ¡ visÃ­vel
-          video.style.display = "block";
-          video.classList.remove("hidden-ready");
-          video.style.opacity = "1";
-          
-          isPlaying = true;
-          videoRetryCount = 0;
-          isLoadingVideo = false;
-          clearTimeout(safetyTimeout);
-          
-          video.play().catch(() => { video.muted = true; video.play(); });
+          nextVideo.src = itemUrl;
+          nextVideo.load();
+          const ok = await waitForVideoReady(nextVideo, 3000);
+          if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
-        // ---- MP4/WebM/etc (sem HEAD) ----
-        // limpa e seta atributos antes do src
-        video.setAttribute("crossorigin", "anonymous");
-        video.preload = "auto";
+        nextVideo.src = itemUrl;
+        nextVideo.load();
+        const ok = await waitForVideoReady(nextVideo, 3000);
+        if (!ok || nextVideo.readyState < 2) throw new Error("video nao pronto");
+      }
 
-        // Verificar se o vÃ­deo estÃ¡ no cache (tanto online quanto offline)
-        try {
-          const cacheKey = `${codigoAtual}::${itemUrl}`;
-          const cachedBlob = await idbGet(cacheKey);
-          
-          if (cachedBlob) {
-            console.log("ðŸ“¦ Carregando vÃ­deo do cache:", itemUrl, "tamanho:", (cachedBlob.size / 1024 / 1024).toFixed(2), "MB");
-            // Criar URL do blob para o vÃ­deo
-            const blobUrl = URL.createObjectURL(cachedBlob);
-            video.src = blobUrl;
-            video.load();
-            
-            // Limpar URL do blob quando o vÃ­deo terminar ou quando mudar de vÃ­deo
-            const cleanupBlob = () => {
-              URL.revokeObjectURL(blobUrl);
-            };
-            video.addEventListener('ended', cleanupBlob, { once: true });
-            video.addEventListener('loadstart', () => {
-              // Se o vÃ­deo mudar antes de terminar, limpar o blob anterior
-              if (video.src !== blobUrl) {
-                cleanupBlob();
-              }
-            }, { once: true });
-            
-            const ok = await waitForVideoReady(video, 8000);
-            if (myToken !== playToken || videoToken !== currentVideoToken) { 
-              cleanupBlob();
-              isLoadingVideo = false; 
-              clearTimeout(safetyTimeout); 
-              return; 
-            }
-            if (!ok || video.readyState < 3) {
-              console.error("VÃ­deo do cache nÃ£o ficou pronto (readyState:", video.readyState, ")");
-              cleanupBlob();
-              isLoadingVideo = false; 
-              clearTimeout(safetyTimeout);
-              
-              // Limpar elementos se falhou
-              if (wasImage) {
-                img.style.display = "block";
-              } else if (wasVideo) {
-                video.style.display = "block";
-              }
-              
-              proximoItem(); 
-              return;
-            }
-          } else {
-            // VÃ­deo nÃ£o estÃ¡ no cache - usar URL original
-            if (!navigator.onLine) {
-              console.warn("âš ï¸ VÃ­deo nÃ£o encontrado no cache offline:", itemUrl);
-              isLoadingVideo = false; 
-              clearTimeout(safetyTimeout);
-              proximoItem(); 
-              return;
-            }
-            
-            console.log("ðŸŒ Carregando vÃ­deo da rede:", itemUrl);
-            // aplicar src e carregar normalmente quando online
-            video.src = itemUrl;
-            video.load();
-
-            // Timeout adaptativo para internet lenta (usa velocidade jÃ¡ detectada)
-            const mp4Timeout = networkSpeed === 'slow' ? 24000 : networkSpeed === 'fast' ? 6000 : 8000;
-            const ok = await waitForVideoReady(video, mp4Timeout);
-            if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
-            if (!ok || video.readyState < 3) {
-              console.warn("âš ï¸ VÃ­deo nÃ£o ficou pronto (readyState:", video.readyState, ", timeout:", mp4Timeout, "ms)");
-              isLoadingVideo = false; 
-              clearTimeout(safetyTimeout);
-              // Se internet lenta, aguardar mais antes de desistir
-              if (networkSpeed === 'slow' && video.readyState >= 2) {
-                console.log("â³ Internet lenta detectada, aguardando mais um pouco...");
-                setTimeout(() => {
-                  if (video.readyState >= 3) {
-                    // VÃ­deo ficou pronto, continuar
-                    const fit = item.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
-                    const focus = item.focus || "center center";
-                    applyFit(video, fit, focus);
-                    
-                    // Esconder qualquer imagem exibida ou snapshot (transiÃ§Ã£o suave)
-                    if (wasImage || wasVideo) {
-                      img.style.display = "none";
-                      img.classList.remove("hidden-ready");
-                      img.src = "";
-                    }
-                    
-                    // Mostrar vÃ­deo e garantir que estÃ¡ visÃ­vel
-                    video.style.display = "block";
-                    video.classList.remove("hidden-ready");
-                    video.style.opacity = "1";
-                    
-                    isPlaying = true;
-                    videoRetryCount = 0;
-                    isLoadingVideo = false;
-                    clearTimeout(safetyTimeout);
-                    
-                    video.play().catch((playError) => {
-                      console.error("Erro ao reproduzir vÃ­deo:", playError);
-                      video.muted = true;
-                      video.play().catch(() => {
-                        isLoadingVideo = false;
-                        clearTimeout(safetyTimeout);
-                        proximoItem();
-                      });
-                    });
-                  } else {
-                    proximoItem();
-                  }
-                }, 3000);
-                return;
-              }
-              proximoItem(); 
-              return;
-            }
-          }
-        } catch (error) {
-          console.error("Erro ao carregar vÃ­deo do cache:", error);
-          // Em caso de erro, tentar carregar da rede se estiver online
-          if (navigator.onLine) {
-            console.log("ðŸŒ Tentando carregar vÃ­deo da rede apÃ³s erro no cache:", itemUrl);
-            video.src = itemUrl;
-            video.load();
-            const mp4Timeout = networkSpeed === 'slow' ? 24000 : networkSpeed === 'fast' ? 6000 : 8000;
-            const ok = await waitForVideoReady(video, mp4Timeout);
-            if (myToken !== playToken || videoToken !== currentVideoToken) { isLoadingVideo = false; clearTimeout(safetyTimeout); return; }
-            if (!ok || video.readyState < 3) {
-              console.warn("âš ï¸ VÃ­deo nÃ£o ficou pronto apÃ³s erro no cache (readyState:", video.readyState, ")");
-              isLoadingVideo = false; 
-              clearTimeout(safetyTimeout);
-              proximoItem(); 
-              return;
-            }
-          } else {
-            console.error("Erro ao carregar vÃ­deo e estÃ¡ offline:", error);
-            isLoadingVideo = false; 
-            clearTimeout(safetyTimeout); 
-            proximoItem(); 
-            return;
-          }
-        }
-
-        const fit  = item.fit   || (FIT_RULES[ORIENTATION]?.video || "cover");
-        const focus = item.focus || "center center";
-        applyFit(video, fit, focus);
-
-        // Esconder imagem ANTES de mostrar vÃ­deo (transiÃ§Ã£o suave)
-        if (wasImage || wasVideo) {
-          img.style.display = "none";
-          img.classList.remove("hidden-ready");
-          img.src = "";
-        }
-        
-        // Mostrar vÃ­deo e garantir que estÃ¡ visÃ­vel
-        video.style.display = "block";
-        video.classList.remove("hidden-ready");
-        video.style.opacity = "1";
-        
-        isPlaying = true;
-        videoRetryCount = 0;
+      if (myToken !== playToken || videoToken !== currentVideoToken) {
         isLoadingVideo = false;
         clearTimeout(safetyTimeout);
-        
-        video.play().catch((playError) => {
-          console.error("Erro ao reproduzir vÃ­deo:", playError);
-          video.muted = true;
-          video.play().catch(() => {
-            isLoadingVideo = false;
-            clearTimeout(safetyTimeout);
-            proximoItem();
-          });
-        });
+        return;
       }
+
+      const fit = item.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
+      const focus = item.focus || "center center";
+      applyFit(nextVideo, fit, focus);
+
+      img.style.display = "none";
+      img.src = "";
+
+      nextVideo.style.display = "block";
+      nextVideo.classList.remove("hidden-ready");
+      nextVideo.style.opacity = "1";
+
+      if (previousVideo && previousVideo !== nextVideo) {
+        previousVideo.style.display = "none";
+        previousVideo.classList.remove("hidden-ready");
+        try {
+          previousVideo.pause();
+          previousVideo.removeAttribute("src");
+          previousVideo.load();
+        } catch {}
+      }
+
+      isPlaying = true;
+      videoRetryCount = 0;
+      isLoadingVideo = false;
+      clearTimeout(safetyTimeout);
+
+      nextVideo.play().catch(() => {
+        nextVideo.muted = true;
+        nextVideo.play().catch(() => proximoItem());
+      });
+
+      video = nextVideo;
+      videoBuffer = previousVideo || nextVideo;
 
       video.onended = () => {
         isPlaying = false;
@@ -2403,64 +2144,57 @@ async function tocarLoop() {
         verificarMudancasPosTrocaEmBackground();
       };
     } catch (e) {
-      console.error("Erro no vÃ­deo:", e, "URL:", itemUrl, "tipo:", item.tipo);
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
-
       if (videoRetryCount < MAX_VIDEO_RETRIES) {
         videoRetryCount++;
-        setTimeout(() => tocarLoop(), 1500);
+        setTimeout(() => tocarLoop(), 150);
         return;
       }
       videoRetryCount = 0;
       isPlaying = false;
       proximoItem();
     }
-  } else {
-    // ---- IMAGEM ----
-    img.onload = () => {
-      if (myToken !== playToken) return;
-
-      const fit   = item.fit   || (FIT_RULES[ORIENTATION]?.image || "cover");
-      const focus = item.focus || "center center";
-      applyFit(img, fit, focus);
-
-      // Limpar vÃ­deo anterior se estava tocando
-      if (wasVideo) {
-        try { 
-          video.pause(); 
-          video.currentTime = 0;
-          video.removeAttribute("src");
-          video.load();
-        } catch {}
-      }
-      
-      // Esconder vÃ­deo ANTES de mostrar imagem (transiÃ§Ã£o suave)
-      video.style.display = "none";
-      video.classList.remove("hidden-ready");
-      
-      // Mostrar imagem e garantir que estÃ¡ visÃ­vel
-      img.style.display = "block";
-      img.classList.remove("hidden-ready");
-      img.style.opacity = "1";
-      
-      isPlaying = true;
-
-      if (typeof duration === "number" && duration > 0) {
-        img.timeoutId = setTimeout(() => {
-          isPlaying = false;
-          proximoItem();
-          verificarMudancasPosTrocaEmBackground();
-        }, duration);
-      }
-    };
-    img.onerror = () => {
-      isPlaying = false;
-      proximoItem();
-    };
-
-    img.src = itemUrl;
+    return;
   }
+
+  img.onload = () => {
+    if (myToken !== playToken) return;
+    const fit = item.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
+    const focus = item.focus || "center center";
+    applyFit(img, fit, focus);
+
+    for (const v of getUniqueVideoEls()) {
+      try {
+        v.pause();
+        v.currentTime = 0;
+        v.removeAttribute("src");
+        v.load();
+      } catch {}
+      v.style.display = "none";
+      v.classList.remove("hidden-ready");
+    }
+
+    img.style.display = "block";
+    img.classList.remove("hidden-ready");
+    img.style.opacity = "1";
+    isPlaying = true;
+
+    if (typeof duration === "number" && duration > 0) {
+      img.timeoutId = setTimeout(() => {
+        isPlaying = false;
+        proximoItem();
+        verificarMudancasPosTrocaEmBackground();
+      }, duration);
+    }
+  };
+
+  img.onerror = () => {
+    isPlaying = false;
+    proximoItem();
+  };
+
+  img.src = itemUrl;
 }
 
 
@@ -3219,15 +2953,15 @@ async function verificarMudancaDispositivo() {
 
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
-  // Parar e esconder vÃ­deo
-  if (video) {
-    try { 
-      video.pause(); 
-      video.currentTime = 0;
-      video.removeAttribute("src");
-      video.load();
+  // Parar e esconder vÃ­deos (ativo + buffer)
+  for (const v of getUniqueVideoEls()) {
+    try {
+      v.pause();
+      v.currentTime = 0;
+      v.removeAttribute("src");
+      v.load();
     } catch {}
-    video.style.display = "none";
+    v.style.display = "none";
   }
   
   // Destruir HLS
@@ -3273,7 +3007,6 @@ async function pararTudoMostrarLogin() {
 // ===== FunÃ§Ã£o para verificar se o player estÃ¡ ativo (nÃ£o estÃ¡ na tela de login) =====
 function isPlayerAtivo() {
   const codigoInput = document.getElementById("codigoInput");
-  const video = document.getElementById("videoPlayer");
   const img = document.getElementById("imgPlayer");
   
   // Se o campo de cÃ³digo estÃ¡ visÃ­vel, o player NÃƒO estÃ¡ ativo
@@ -3285,8 +3018,8 @@ function isPlayerAtivo() {
   }
   
   // Se vÃ­deo ou imagem estÃ£o visÃ­veis, o player estÃ¡ ativo
-  if (video && video.style.display !== 'none') {
-    return true;
+  for (const v of getUniqueVideoEls()) {
+    if (v && v.style.display !== 'none') return true;
   }
   if (img && img.style.display !== 'none') {
     return true;
@@ -3371,9 +3104,13 @@ function entrarFullscreen() {
   
   // Adicionar elementos de mÃ­dia se existirem
   const video = document.getElementById("videoPlayer");
+  const videoB = document.getElementById("videoPlayerB");
   const img = document.getElementById("imgPlayer");
   if (video && video.style.display !== 'none') {
     elementsToTry.push(video);
+  }
+  if (videoB && videoB.style.display !== 'none') {
+    elementsToTry.push(videoB);
   }
   if (img && img.style.display !== 'none') {
     elementsToTry.push(img);
@@ -3455,14 +3192,13 @@ function mostrarLogin() {
     }
   }
   
-  // Garantir que vÃ­deo e imagem estejam escondidos e com z-index baixo
-  const video = document.getElementById("videoPlayer");
+  // Garantir que vÃ­deos e imagem estejam escondidos e com z-index baixo
   const img = document.getElementById("imgPlayer");
-  if (video) {
-    video.style.display = "none";
-    video.style.zIndex = "-1";
-    video.style.opacity = "0";
-    try { video.pause(); } catch {}
+  for (const v of getUniqueVideoEls()) {
+    v.style.display = "none";
+    v.style.zIndex = "-1";
+    v.style.opacity = "0";
+    try { v.pause(); } catch {}
   }
   if (img) {
     img.style.display = "none";
