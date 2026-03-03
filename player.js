@@ -2166,18 +2166,8 @@ async function tocarLoop() {
       img.src = "";
 
       nextVideo.style.display = "block";
-      nextVideo.classList.remove("hidden-ready");
-      nextVideo.style.opacity = "1";
-
-      if (previousVideo && previousVideo !== nextVideo) {
-        previousVideo.style.display = "none";
-        previousVideo.classList.remove("hidden-ready");
-        try {
-          previousVideo.pause();
-          previousVideo.removeAttribute("src");
-          previousVideo.load();
-        } catch {}
-      }
+      nextVideo.classList.add("hidden-ready");
+      nextVideo.style.opacity = "0";
 
       isPlaying = true;
       videoRetryCount = 0;
@@ -2186,9 +2176,59 @@ async function tocarLoop() {
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
 
+      let didSwap = false;
+      let swapFallbackId = null;
+      const finalizeSwap = () => {
+        if (didSwap) return;
+        if (myToken !== playToken || videoToken !== currentVideoToken) return;
+        didSwap = true;
+        if (swapFallbackId) {
+          clearTimeout(swapFallbackId);
+          swapFallbackId = null;
+        }
+        nextVideo.classList.remove("hidden-ready");
+        nextVideo.style.opacity = "1";
+
+        if (previousVideo && previousVideo !== nextVideo) {
+          previousVideo.style.display = "none";
+          previousVideo.classList.remove("hidden-ready");
+          try {
+            previousVideo.pause();
+            previousVideo.removeAttribute("src");
+            previousVideo.load();
+          } catch {}
+        }
+
+        video = nextVideo;
+        videoBuffer = previousVideo || nextVideo;
+        preloadedBufferUrl = null;
+        preloadUpcomingVideoInBuffer(currentIndex).catch(() => {});
+      };
+
+      const onSwapReady = () => {
+        nextVideo.removeEventListener("playing", onSwapReady);
+        nextVideo.removeEventListener("timeupdate", onSwapReady);
+        finalizeSwap();
+      };
+
+      nextVideo.addEventListener("playing", onSwapReady, { once: true });
+      nextVideo.addEventListener("timeupdate", onSwapReady, { once: true });
+      swapFallbackId = setTimeout(() => {
+        if (!nextVideo.paused && nextVideo.readyState >= 3) finalizeSwap();
+      }, 450);
+
       nextVideo.play().catch(() => {
         nextVideo.muted = true;
         nextVideo.play().catch(() => {
+          nextVideo.removeEventListener("playing", onSwapReady);
+          nextVideo.removeEventListener("timeupdate", onSwapReady);
+          if (swapFallbackId) {
+            clearTimeout(swapFallbackId);
+            swapFallbackId = null;
+          }
+          nextVideo.style.display = "none";
+          nextVideo.classList.remove("hidden-ready");
+          nextVideo.style.opacity = "1";
           if (lastFailedUrl === itemUrl) {
             lastFailedRetries += 1;
           } else {
@@ -2206,13 +2246,9 @@ async function tocarLoop() {
         });
       });
 
-      video = nextVideo;
-      videoBuffer = previousVideo || nextVideo;
-      preloadedBufferUrl = null;
-
       const onEndedToken = myToken;
       const startedAt = performance.now();
-      video.onended = () => {
+      nextVideo.onended = () => {
         if (onEndedToken !== playToken) return;
         const elapsed = performance.now() - startedAt;
         if (elapsed < 250) {
@@ -2235,9 +2271,6 @@ async function tocarLoop() {
         proximoItem();
         verificarMudancasPosTrocaEmBackground();
       };
-
-      // Pré-aquecer o próximo item no buffer inativo sem bloquear reprodução.
-      preloadUpcomingVideoInBuffer(currentIndex).catch(() => {});
     } catch (e) {
       isLoadingVideo = false;
       clearTimeout(safetyTimeout);
