@@ -68,6 +68,17 @@ function getUniqueVideoEls() {
   return out;
 }
 
+function restoreMediaLayerStyles() {
+  for (const v of getUniqueVideoEls()) {
+    v.style.zIndex = "1";
+    v.style.opacity = "1";
+  }
+  if (img) {
+    img.style.zIndex = "1";
+    img.style.opacity = "1";
+  }
+}
+
 function isVideoItem(item, itemUrl) {
   const tipo = (item?.tipo || "").toLowerCase();
   return /\.m3u8(\?|$)/i.test(itemUrl) ||
@@ -434,6 +445,20 @@ async function idbAllKeys() {
 // ===== Cache helpers (namespaced por cÃ³digo) =====
 function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
+}
+
+function buildPlaylistSignature(items) {
+  const list = Array.isArray(items) ? items : [];
+  return list.map((item, index) => {
+    const url = (item?.url || "").trim();
+    const urlPortrait = (item?.urlPortrait || "").trim();
+    const urlLandscape = (item?.urlLandscape || "").trim();
+    const tipo = (item?.tipo || "").toString().trim().toLowerCase();
+    const duration = item?.duration ?? "";
+    const fit = item?.fit ?? "";
+    const focus = item?.focus ?? "";
+    return `${index}::${url}::${urlPortrait}::${urlLandscape}::${tipo}::${duration}::${fit}::${focus}`;
+  }).join("||");
 }
 
 // ===== AtualizaÃ§Ã£o de Status do Cache =====
@@ -1845,12 +1870,11 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
       urlLandscape: item.urlLandscape ?? null,
     }));
 
-    // Comparar com cache atual
+    // Comparar com cache atual (respeitando a ordem dos itens)
     const cacheAtual = playlist || [];
-    const urlsCache = cacheAtual.map(i => pickSourceForOrientation(i)).sort();
-    const urlsNovo = newPlaylist.map(i => pickSourceForOrientation(i)).sort();
-    const mudou = urlsCache.length !== urlsNovo.length || 
-                  urlsCache.join('|') !== urlsNovo.join('|');
+    const assinaturaCache = buildPlaylistSignature(cacheAtual);
+    const assinaturaNova = buildPlaylistSignature(newPlaylist);
+    const mudou = assinaturaCache !== assinaturaNova;
 
     if (mudou) {
       console.log("ðŸ”„ MudanÃ§a detectada na playlist, atualizando cache...");
@@ -1876,26 +1900,13 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     currentUrl = null,
   } = estadoAnterior;
 
-  // Detectar se a playlist mudou comparando URLs
+  // Detectar se a playlist mudou respeitando tambÃ©m a ordem dos itens
   const playlistAntiga = Array.isArray(playlist) ? playlist : [];
   const playlistNova = Array.isArray(newPlaylist) ? newPlaylist : [];
-  
-  // Normalizar URLs para comparaÃ§Ã£o (extrair apenas URLs principais, ordenar e remover espaÃ§os)
-  const extrairUrls = (items) => {
-    const urls = [];
-    for (const item of items) {
-      const url = pickSourceForOrientation(item);
-      if (url) urls.push(url.trim());
-    }
-    return urls.sort();
-  };
-  
-  const urlsAntigas = extrairUrls(playlistAntiga);
-  const urlsNovas = extrairUrls(playlistNova);
-  
-  // Comparar arrays de URLs ordenadas
-  const playlistMudou = urlsAntigas.length !== urlsNovas.length ||
-    urlsAntigas.join('|') !== urlsNovas.join('|');
+
+  const assinaturaAntiga = buildPlaylistSignature(playlistAntiga);
+  const assinaturaNova = buildPlaylistSignature(playlistNova);
+  const playlistMudou = assinaturaAntiga !== assinaturaNova;
 
   playlist = Array.isArray(newPlaylist) ? newPlaylist : [];
   currentPlaylistId = playlistId ?? null;
@@ -2051,6 +2062,9 @@ async function resetAllCachesForNewCode() {
   }
   preloadedBufferUrl = null;
   preloadingBuffer = false;
+  isLoadingVideo = false;
+  playToken++;
+  currentVideoToken++;
   img.src = "";
   
   // Marcar cache como nÃ£o pronto ao trocar de cÃ³digo
@@ -2072,6 +2086,7 @@ async function tocarLoop() {
   for (const v of getUniqueVideoEls()) v.onended = null;
   img.onload = null;
   img.onerror = null;
+  restoreMediaLayerStyles();
 
   currentIndex = currentIndex % playlist.length;
   const item = playlist[currentIndex];
@@ -3112,6 +3127,9 @@ async function pararTudoMostrarLogin() {
   }
   preloadedBufferUrl = null;
   preloadingBuffer = false;
+  isLoadingVideo = false;
+  playToken++;
+  currentVideoToken++;
   
   // Destruir HLS
   destroyHls();
@@ -3851,7 +3869,7 @@ function mostrarPopupPromocao() {
   `;
 
   const lightningIcon = document.createElement('div');
-  lightningIcon.innerHTML = 'âš¡';
+  lightningIcon.textContent = '\u26A1';
   lightningIcon.style.cssText = `
     font-size: 32px;
     color: #FCD34D;
@@ -3860,7 +3878,7 @@ function mostrarPopupPromocao() {
   `;
 
   const headerText = document.createElement('div');
-  headerText.textContent = 'OFERTA RELÃ‚MPAGO';
+  headerText.textContent = 'OFERTA REL\u00C2MPAGO';
   headerText.style.cssText = `
     color: white;
     font-weight: 900;
@@ -3932,7 +3950,7 @@ function mostrarPopupPromocao() {
   // Texto da promoÃ§Ã£o
   const promoText = document.createElement('div');
   promoText.id = 'promoText';
-  promoText.textContent = promoData.texto_promo || 'PromoÃ§Ã£o especial';
+  promoText.textContent = promoData.texto_promo || 'Promo\u00E7\u00E3o especial';
   promoText.style.cssText = `
     font-size: 24px;
     color: #374151;
@@ -4002,7 +4020,7 @@ function mostrarPopupPromocao() {
   `;
 
   const ultimasUnidades = document.createElement('div');
-  ultimasUnidades.textContent = 'ÃšLTIMAS UNIDADES';
+  ultimasUnidades.textContent = '\u00DALTIMAS UNIDADES';
   ultimasUnidades.style.cssText = `
     font-size: 14px;
     font-weight: bold;
