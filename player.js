@@ -22,6 +22,8 @@ const POLLING_MS = 1000; // 1 segundo para resposta instantÃ¢nea
 // - "immediate": Toca assim que possÃ­vel (mais rÃ¡pido, pode travar em conexÃµes lentas)
 const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
+const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
+const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
 
 let playlist = [];
 let currentIndex = 0;
@@ -53,6 +55,10 @@ let lastFailedRetries = 0;
 let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
+const itemFailureState = new Map();
+let nativeExoListenerHandle = null;
+let nativeExoPendingToken = null;
+let nativeExoPendingUrl = null;
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
@@ -87,6 +93,148 @@ function stopPlaybackWatchdog() {
   }
 }
 
+function getItemFailureEntry(url) {
+  if (!url) return null;
+  return itemFailureState.get(url) || null;
+}
+
+function isItemOnCooldown(url) {
+  const entry = getItemFailureEntry(url);
+  if (!entry || !entry.cooldownUntil) return false;
+  if (Date.now() >= entry.cooldownUntil) {
+    itemFailureState.delete(url);
+    return false;
+  }
+  return true;
+}
+
+function registerItemFailure(url, reason = "unknown") {
+  if (!url) return;
+  const now = Date.now();
+  const prev = getItemFailureEntry(url) || { failures: 0, cooldownUntil: 0, lastReason: null };
+  const nextFailures = prev.failures + 1;
+  const next = {
+    failures: nextFailures,
+    cooldownUntil: prev.cooldownUntil || 0,
+    lastReason: reason,
+  };
+  if (nextFailures >= ITEM_FAILURES_BEFORE_COOLDOWN) {
+    next.cooldownUntil = now + ITEM_FAILURE_COOLDOWN_MS;
+  }
+  itemFailureState.set(url, next);
+  if (next.cooldownUntil > now) {
+    const secs = Math.max(1, Math.round((next.cooldownUntil - now) / 1000));
+    console.warn("[playback] cooling down item for", secs, "s:", url, "reason:", reason);
+  }
+}
+
+function clearItemFailure(url) {
+  if (!url) return;
+  if (itemFailureState.has(url)) itemFailureState.delete(url);
+}
+
+function isNativeAndroid() {
+  try {
+    return !!window.Capacitor &&
+      typeof window.Capacitor.getPlatform === "function" &&
+      window.Capacitor.getPlatform() === "android" &&
+      typeof window.Capacitor.isNativePlatform === "function" &&
+      window.Capacitor.isNativePlatform();
+  } catch {
+    return false;
+  }
+}
+
+function getNativeExoPlugin() {
+  try {
+    return window.Capacitor?.Plugins?.MritExoPlayer || null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureNativeExoListener() {
+  const plugin = getNativeExoPlugin();
+  if (!plugin || nativeExoListenerHandle) return;
+  try {
+    nativeExoListenerHandle = await plugin.addListener("state", (event) => {
+      const state = event?.state;
+      const token = event?.token ?? null;
+      const url = event?.url || nativeExoPendingUrl;
+      if (token === null || token !== String(nativeExoPendingToken)) return;
+
+      if (state === "ended") {
+        clearItemFailure(url);
+        isPlaying = false;
+        stopPlaybackWatchdog();
+        proximoItem();
+        verificarMudancasPosTrocaEmBackground();
+      } else if (state === "error") {
+        registerItemFailure(url, "native_exo_error");
+        isPlaying = false;
+        stopPlaybackWatchdog();
+        if (lastFailedUrl === url) {
+          lastFailedRetries += 1;
+        } else {
+          lastFailedUrl = url;
+          lastFailedRetries = 1;
+        }
+        if (lastFailedRetries > 1) {
+          lastFailedUrl = null;
+          lastFailedRetries = 0;
+          proximoItem();
+        } else {
+          setTimeout(() => tocarLoop(), 150);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn("Native Exo listener unavailable:", err?.message || err);
+  }
+}
+
+async function stopNativeVideoPlayback() {
+  const plugin = getNativeExoPlugin();
+  nativeExoPendingToken = null;
+  nativeExoPendingUrl = null;
+  if (!plugin) return;
+  try {
+    await plugin.stop();
+  } catch {}
+}
+
+async function tryPlayWithNativeExo(item, itemUrl, token) {
+  if (!isNativeAndroid()) return false;
+  const plugin = getNativeExoPlugin();
+  if (!plugin) return false;
+  try {
+    await ensureNativeExoListener();
+    const fit = item?.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
+    nativeExoPendingToken = token;
+    nativeExoPendingUrl = itemUrl;
+    await plugin.play({
+      url: itemUrl,
+      fit,
+      muted: true,
+      token: String(token),
+    });
+    for (const v of getUniqueVideoEls()) {
+      v.style.display = "none";
+    }
+    img.style.display = "none";
+    img.src = "";
+    clearItemFailure(itemUrl);
+    isPlaying = true;
+    isLoadingVideo = false;
+    return true;
+  } catch (err) {
+    console.warn("Native Exo play failed, fallback to HTML video:", err?.message || err);
+    nativeExoPendingToken = null;
+    nativeExoPendingUrl = null;
+    return false;
+  }
+}
+
 function startPlaybackWatchdog(videoEl, token, itemUrl) {
   stopPlaybackWatchdog();
   let lastTime = -1;
@@ -112,6 +260,7 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
       stopPlaybackWatchdog();
       isPlaying = false;
       try { videoEl.pause(); } catch {}
+      registerItemFailure(itemUrl, "stall_watchdog");
       proximoItem();
       verificarMudancasPosTrocaEmBackground();
     }
@@ -2115,6 +2264,7 @@ async function resetAllCachesForNewCode() {
 
 async function tocarLoop() {
   if (!playlist.length) {
+    await stopNativeVideoPlayback();
     for (const v of getUniqueVideoEls()) v.style.display = "none";
     img.style.display = "none";
     isPlaying = false;
@@ -2123,6 +2273,7 @@ async function tocarLoop() {
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+  await stopNativeVideoPlayback();
   stopPlaybackWatchdog();
   for (const v of getUniqueVideoEls()) v.onended = null;
   img.onload = null;
@@ -2130,10 +2281,26 @@ async function tocarLoop() {
   restoreMediaLayerStyles();
 
   currentIndex = currentIndex % playlist.length;
-  const item = playlist[currentIndex];
-  if (!item || !item.url) { proximoItem(); return; }
+  let item = null;
+  let itemUrl = null;
+  let attempts = 0;
+  while (attempts < playlist.length) {
+    const candidate = playlist[currentIndex];
+    const candidateUrl = candidate ? pickSourceForOrientation(candidate) : null;
+    if (candidate && candidate.url && candidateUrl && !isItemOnCooldown(candidateUrl)) {
+      item = candidate;
+      itemUrl = candidateUrl;
+      break;
+    }
+    currentIndex = (currentIndex + 1) % playlist.length;
+    attempts++;
+  }
+  if (!item || !itemUrl) {
+    console.warn("[playback] all items unavailable/cooling down; waiting and retrying...");
+    setTimeout(() => tocarLoop(), 1000);
+    return;
+  }
 
-  const itemUrl = pickSourceForOrientation(item);
   currentItemUrl = itemUrl;
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
@@ -2144,6 +2311,11 @@ async function tocarLoop() {
 
   if (isVideo) {
     if (isLoadingVideo) { setTimeout(() => tocarLoop(), 60); return; }
+
+    const nativeStarted = await tryPlayWithNativeExo(item, itemUrl, myToken);
+    if (nativeStarted) {
+      return;
+    }
 
     isLoadingVideo = true;
     currentVideoToken++;
@@ -2258,6 +2430,7 @@ async function tocarLoop() {
         video = nextVideo;
         videoBuffer = previousVideo || nextVideo;
         preloadedBufferUrl = null;
+        clearItemFailure(itemUrl);
         startPlaybackWatchdog(nextVideo, myToken, itemUrl);
         preloadUpcomingVideoInBuffer(currentIndex).catch(() => {});
       };
@@ -2296,6 +2469,7 @@ async function tocarLoop() {
           if (lastFailedRetries > 1) {
             lastFailedUrl = null;
             lastFailedRetries = 0;
+            registerItemFailure(itemUrl, "play_start_failed_twice");
             proximoItem();
             return;
           }
@@ -2320,9 +2494,11 @@ async function tocarLoop() {
             setTimeout(() => tocarLoop(), 80);
             return;
           }
+          registerItemFailure(itemUrl, "very_short_end");
         } else {
           lastShortEndUrl = null;
           lastShortEndRetries = 0;
+          clearItemFailure(itemUrl);
         }
         isPlaying = false;
         stopPlaybackWatchdog();
@@ -2345,6 +2521,7 @@ async function tocarLoop() {
         lastFailedRetries = 0;
         videoRetryCount = 0;
         isPlaying = false;
+        registerItemFailure(itemUrl, "load_failed_twice");
         proximoItem();
         return;
       }
@@ -2362,6 +2539,7 @@ async function tocarLoop() {
 
   img.onload = () => {
     if (myToken !== playToken) return;
+    stopNativeVideoPlayback().catch(() => {});
     const fit = item.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
     const focus = item.focus || "center center";
     applyFit(img, fit, focus);
@@ -2383,6 +2561,7 @@ async function tocarLoop() {
     img.style.display = "block";
     img.classList.remove("hidden-ready");
     img.style.opacity = "1";
+    clearItemFailure(itemUrl);
     isPlaying = true;
 
     if (typeof duration === "number" && duration > 0) {
@@ -2400,6 +2579,7 @@ async function tocarLoop() {
 
   img.onerror = () => {
     isPlaying = false;
+    registerItemFailure(itemUrl, "image_error");
     proximoItem();
   };
 
@@ -3161,6 +3341,7 @@ async function verificarMudancaDispositivo() {
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
   // Parar e esconder vÃ­deos (ativo + buffer)
+  await stopNativeVideoPlayback();
   for (const v of getUniqueVideoEls()) {
     try {
       v.pause();
