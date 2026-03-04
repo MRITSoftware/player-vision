@@ -112,6 +112,27 @@ async function run() {
   if (fs.existsSync(icon512)) {
     await writePng(icon512, path.join(resDir, "drawable", "splash.png"));
     await writePng(icon512, path.join(resDir, "drawable-night", "splash.png"));
+    // O Android pode preferir recursos de densidade/orientação (drawable-port-*/drawable-land-*).
+    // Se esses arquivos ficarem no padrão do template, o splash exibido não será o icon-512.
+    const allSplashFiles = [];
+    const stack = [resDir];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      const entries = fs.readdirSync(current, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (entry.isFile() && entry.name === "splash.png") {
+          allSplashFiles.push(fullPath);
+        }
+      }
+    }
+    for (const splashPath of allSplashFiles) {
+      await writePng(icon512, splashPath);
+    }
     console.log("[assets] Splash Android atualizado a partir de icon-512.png.");
   }
 }
