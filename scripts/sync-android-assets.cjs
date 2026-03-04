@@ -77,20 +77,28 @@ function syncNativeExoPlayer() {
   }
 
   const exoDependency = "implementation 'com.google.android.exoplayer:exoplayer:2.19.1'";
-  const depOk = ensureGradleDependency(exoDependency);
-  if (!depOk) {
-    console.warn("[assets] Could not patch ExoPlayer dependency in build.gradle.");
+  const glideDependency = "implementation 'com.github.bumptech.glide:glide:4.16.0'";
+  const depOkExo = ensureGradleDependency(exoDependency);
+  const depOkGlide = ensureGradleDependency(glideDependency);
+  if (!depOkExo || !depOkGlide) {
+    console.warn("[assets] Could not patch all native media dependencies in build.gradle.");
   }
 
   const pluginJava = `package com.mritsoftware.player;
 
 import android.net.Uri;
+import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
+import com.bumptech.glide.Glide;
+import com.bumptech.glide.request.target.CustomTarget;
+import com.bumptech.glide.request.transition.Transition;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -109,6 +117,7 @@ import java.util.Iterator;
 public class MritExoPlayerPlugin extends Plugin {
     private ExoPlayer player;
     private PlayerView playerView;
+    private ImageView imageView;
     private FrameLayout overlay;
     private String currentToken = "";
     private String currentUrl = "";
@@ -139,6 +148,14 @@ public class MritExoPlayerPlugin extends Plugin {
         player = new ExoPlayer.Builder(getActivity()).build();
         player.addListener(playerListener);
 
+        imageView = new ImageView(getActivity());
+        imageView.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        imageView.setVisibility(View.GONE);
+
         playerView = new PlayerView(getActivity());
         playerView.setUseController(false);
         playerView.setPlayer(player);
@@ -147,6 +164,7 @@ public class MritExoPlayerPlugin extends Plugin {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        playerView.setVisibility(View.GONE);
 
         overlay = new FrameLayout(getActivity());
         overlay.setLayoutParams(new FrameLayout.LayoutParams(
@@ -154,6 +172,7 @@ public class MritExoPlayerPlugin extends Plugin {
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
         overlay.setVisibility(View.GONE);
+        overlay.addView(imageView);
         overlay.addView(playerView);
 
         ViewGroup root = getActivity().findViewById(android.R.id.content);
@@ -169,6 +188,30 @@ public class MritExoPlayerPlugin extends Plugin {
         } else {
             playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
         }
+    }
+
+    private void setImageFit(String fit) {
+        if (imageView == null) return;
+        String mode = fit == null ? "cover" : fit.toLowerCase();
+        if ("contain".equals(mode)) {
+            imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        } else {
+            imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        }
+    }
+
+    private void showVideoLayer() {
+        if (overlay == null || playerView == null || imageView == null) return;
+        overlay.setVisibility(View.VISIBLE);
+        imageView.setVisibility(View.GONE);
+        playerView.setVisibility(View.VISIBLE);
+    }
+
+    private void showImageLayer() {
+        if (overlay == null || playerView == null || imageView == null) return;
+        overlay.setVisibility(View.VISIBLE);
+        playerView.setVisibility(View.GONE);
+        imageView.setVisibility(View.VISIBLE);
     }
 
     private void emitState(String state, JSObject extra) {
@@ -204,7 +247,8 @@ public class MritExoPlayerPlugin extends Plugin {
                 currentToken = token;
                 currentUrl = url;
                 setResizeMode(fit);
-                overlay.setVisibility(View.VISIBLE);
+                showVideoLayer();
+                Glide.with(getActivity()).clear(imageView);
                 player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
                 player.prepare();
                 player.setVolume((muted != null && muted) ? 0f : 1f);
@@ -220,6 +264,62 @@ public class MritExoPlayerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void showImage(PluginCall call) {
+        String url = call.getString("url");
+        String fit = call.getString("fit", "cover");
+        String token = call.getString("token", "");
+
+        if (url == null || url.trim().isEmpty()) {
+            call.reject("url is required");
+            return;
+        }
+
+        getActivity().runOnUiThread(() -> {
+            try {
+                ensureInitialized();
+                currentToken = token;
+                currentUrl = url;
+                setImageFit(fit);
+                if (player != null) {
+                    player.pause();
+                    player.clearMediaItems();
+                }
+                showImageLayer();
+
+                Glide.with(getActivity())
+                        .load(url)
+                        .timeout(15000)
+                        .into(new CustomTarget<Drawable>() {
+                            @Override
+                            public void onResourceReady(@NonNull Drawable resource, @Nullable Transition<? super Drawable> transition) {
+                                imageView.setImageDrawable(resource);
+                                emitState("image_ready", null);
+                                JSObject ret = new JSObject();
+                                ret.put("ok", true);
+                                call.resolve(ret);
+                            }
+
+                            @Override
+                            public void onLoadCleared(@Nullable Drawable placeholder) {
+                                imageView.setImageDrawable(placeholder);
+                            }
+
+                            @Override
+                            public void onLoadFailed(@Nullable Drawable errorDrawable) {
+                                imageView.setImageDrawable(errorDrawable);
+                                JSObject extra = new JSObject();
+                                extra.put("message", "image_load_failed");
+                                emitState("image_error", extra);
+                                call.reject("image load failed");
+                            }
+                        });
+            } catch (Exception e) {
+                call.reject("showImage failed: " + e.getMessage(), e);
+            }
+        });
+    }
+
+    @PluginMethod
     public void stop(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             try {
@@ -227,6 +327,12 @@ public class MritExoPlayerPlugin extends Plugin {
                     player.stop();
                     player.clearMediaItems();
                 }
+                if (imageView != null) {
+                    Glide.with(getActivity()).clear(imageView);
+                    imageView.setImageDrawable(null);
+                    imageView.setVisibility(View.GONE);
+                }
+                if (playerView != null) playerView.setVisibility(View.GONE);
                 if (overlay != null) overlay.setVisibility(View.GONE);
                 emitState("stopped", null);
                 JSObject ret = new JSObject();
@@ -251,6 +357,10 @@ public class MritExoPlayerPlugin extends Plugin {
             player.removeListener(playerListener);
             player.release();
             player = null;
+        }
+        if (imageView != null) {
+            try { Glide.with(getActivity()).clear(imageView); } catch (Exception ignored) {}
+            imageView = null;
         }
         if (overlay != null) overlay.setVisibility(View.GONE);
         initialized = false;

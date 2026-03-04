@@ -24,6 +24,8 @@ const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
 const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
 const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
+const ENABLE_NATIVE_EXO_DEFAULT = true;
+const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = true;
 
 let playlist = [];
 let currentIndex = 0;
@@ -145,6 +147,15 @@ function isNativeAndroid() {
   }
 }
 
+function isNativeExoEnabled() {
+  try {
+    const raw = localStorage.getItem("mrit_use_native_exo");
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+  } catch {}
+  return ENABLE_NATIVE_EXO_DEFAULT && isNativeAndroid();
+}
+
 function getNativeExoPlugin() {
   try {
     return window.Capacitor?.Plugins?.MritExoPlayer || null;
@@ -153,7 +164,19 @@ function getNativeExoPlugin() {
   }
 }
 
+function nativeCallWithTimeout(promise, ms = 1500) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("native timeout")), ms))
+  ]);
+}
+
+function isNativeMediaModeActive() {
+  return isNativeAndroid() && isNativeExoEnabled() && NATIVE_ANDROID_NATIVE_MEDIA_ONLY;
+}
+
 async function ensureNativeExoListener() {
+  if (!isNativeExoEnabled()) return;
   const plugin = getNativeExoPlugin();
   if (!plugin || nativeExoListenerHandle) return;
   try {
@@ -169,6 +192,8 @@ async function ensureNativeExoListener() {
         stopPlaybackWatchdog();
         proximoItem();
         verificarMudancasPosTrocaEmBackground();
+      } else if (state === "image_ready") {
+        clearItemFailure(url);
       } else if (state === "error") {
         registerItemFailure(url, "native_exo_error");
         isPlaying = false;
@@ -186,6 +211,10 @@ async function ensureNativeExoListener() {
         } else {
           setTimeout(() => tocarLoop(), 150);
         }
+      } else if (state === "image_error") {
+        registerItemFailure(url, "native_image_error");
+        isPlaying = false;
+        proximoItem();
       }
     });
   } catch (err) {
@@ -194,17 +223,18 @@ async function ensureNativeExoListener() {
 }
 
 async function stopNativeVideoPlayback() {
+  if (!isNativeExoEnabled()) return;
   const plugin = getNativeExoPlugin();
   nativeExoPendingToken = null;
   nativeExoPendingUrl = null;
   if (!plugin) return;
   try {
-    await plugin.stop();
+    await nativeCallWithTimeout(plugin.stop(), 1200);
   } catch {}
 }
 
 async function tryPlayWithNativeExo(item, itemUrl, token) {
-  if (!isNativeAndroid()) return false;
+  if (!isNativeAndroid() || !isNativeExoEnabled()) return false;
   const plugin = getNativeExoPlugin();
   if (!plugin) return false;
   try {
@@ -212,12 +242,13 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
     const fit = item?.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
-    await plugin.play({
+    await nativeCallWithTimeout(plugin.play({
       url: itemUrl,
       fit,
       muted: true,
       token: String(token),
-    });
+    }), 2000);
+    console.log("[native-exo] play requested:", itemUrl);
     for (const v of getUniqueVideoEls()) {
       v.style.display = "none";
     }
@@ -228,7 +259,32 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
     isLoadingVideo = false;
     return true;
   } catch (err) {
-    console.warn("Native Exo play failed, fallback to HTML video:", err?.message || err);
+    console.warn("[native-exo] play failed, fallback to HTML video:", err?.message || err);
+    nativeExoPendingToken = null;
+    nativeExoPendingUrl = null;
+    return false;
+  }
+}
+
+async function tryShowImageNative(item, itemUrl, token) {
+  if (!isNativeAndroid() || !isNativeExoEnabled()) return false;
+  const plugin = getNativeExoPlugin();
+  if (!plugin) return false;
+  try {
+    await ensureNativeExoListener();
+    const fit = item?.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
+    nativeExoPendingToken = token;
+    nativeExoPendingUrl = itemUrl;
+    await nativeCallWithTimeout(plugin.showImage({
+      url: itemUrl,
+      fit,
+      token: String(token),
+    }), 2500);
+    clearItemFailure(itemUrl);
+    isPlaying = true;
+    return true;
+  } catch (err) {
+    console.warn("[native-media] image failed:", err?.message || err);
     nativeExoPendingToken = null;
     nativeExoPendingUrl = null;
     return false;
@@ -2114,6 +2170,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   await salvarCache(playlist, (playlistId ?? codigoAtual));
 
   if (!playlist.length) {
+    await stopNativeVideoPlayback();
     try { video.pause(); } catch {}
     destroyHls();
     if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
@@ -2250,6 +2307,7 @@ async function resetAllCachesForNewCode() {
   }
   preloadedBufferUrl = null;
   preloadingBuffer = false;
+  await stopNativeVideoPlayback();
   stopPlaybackWatchdog();
   isLoadingVideo = false;
   playToken++;
@@ -2312,8 +2370,16 @@ async function tocarLoop() {
   if (isVideo) {
     if (isLoadingVideo) { setTimeout(() => tocarLoop(), 60); return; }
 
+    const nativeOnlyMode = isNativeMediaModeActive();
     const nativeStarted = await tryPlayWithNativeExo(item, itemUrl, myToken);
     if (nativeStarted) {
+      return;
+    }
+    if (nativeOnlyMode) {
+      console.warn("[native-exo] strict mode active; skipping web fallback for:", itemUrl);
+      registerItemFailure(itemUrl, "native_exo_required");
+      isPlaying = false;
+      proximoItem();
       return;
     }
 
@@ -2534,6 +2600,26 @@ async function tocarLoop() {
       isPlaying = false;
       proximoItem();
     }
+    return;
+  }
+
+  if (isNativeMediaModeActive()) {
+    const nativeImageStarted = await tryShowImageNative(item, itemUrl, myToken);
+    if (nativeImageStarted) {
+      const imageDuration = (typeof duration === "number" && duration > 0) ? duration : 15000;
+      if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+      img.timeoutId = setTimeout(() => {
+        if (myToken !== playToken) return;
+        isPlaying = false;
+        proximoItem();
+        verificarMudancasPosTrocaEmBackground();
+      }, imageDuration);
+      return;
+    }
+    console.warn("[native-media] strict mode active; skipping web image fallback for:", itemUrl);
+    registerItemFailure(itemUrl, "native_image_required");
+    isPlaying = false;
+    proximoItem();
     return;
   }
 
