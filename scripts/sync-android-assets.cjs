@@ -160,6 +160,7 @@ public class MritExoPlayerPlugin extends Plugin {
         playerView.setUseController(false);
         playerView.setPlayer(player);
         playerView.setKeepScreenOn(true);
+        playerView.setKeepContentOnPlayerReset(true);
         playerView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT

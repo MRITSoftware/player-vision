@@ -2331,7 +2331,9 @@ async function tocarLoop() {
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
-  await stopNativeVideoPlayback();
+  if (!isNativeMediaModeActive()) {
+    await stopNativeVideoPlayback();
+  }
   stopPlaybackWatchdog();
   for (const v of getUniqueVideoEls()) v.onended = null;
   img.onload = null;
