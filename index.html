@@ -234,20 +234,13 @@
       setTimeout(entrarFullscreen, 100);
     });
 
-    // Botão iniciar: garantir que o evento só é registrado após o DOM e player.js carregarem
-    document.addEventListener('DOMContentLoaded', function() {
-      const btn = document.getElementById("btnEntrar");
-      if (btn) {
-        btn.addEventListener("click", () => {
-          if (typeof startPlayer === 'function') {
-            startPlayer();
-            // Forçar fullscreen após iniciar
-            setTimeout(entrarFullscreen, 100);
-            setTimeout(entrarFullscreen, 500);
-          } else {
-            alert('Função startPlayer não encontrada!');
-          }
-        });
+    // Botão iniciar
+    document.getElementById("btnEntrar").addEventListener("click", () => {
+      if (typeof startPlayer === 'function') {
+        startPlayer();
+        // Forçar fullscreen após iniciar
+        setTimeout(entrarFullscreen, 100);
+        setTimeout(entrarFullscreen, 500);
       }
     });
     
@@ -272,7 +265,6 @@
     function isPlayerAtivo() {
       const codigoInput = document.getElementById("codigoInput");
       const video = document.getElementById("videoPlayer");
-      const videoB = document.getElementById("videoPlayerB");
       const img = document.getElementById("imgPlayer");
       
       // Se o campo de código está visível, o player NÃO está ativo
@@ -282,9 +274,6 @@
       
       // Se vídeo ou imagem estão visíveis, o player está ativo
       if (video && video.style.display !== 'none') {
-        return true;
-      }
-      if (videoB && videoB.style.display !== 'none') {
         return true;
       }
       if (img && img.style.display !== 'none') {

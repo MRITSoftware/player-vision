@@ -766,7 +766,7 @@ async function verificarEAtualizarStatusCache() {
         totalImagens++;
         // Verificar se imagem estÃ¡ no cache do Service Worker
         try {
-          const cache = await caches.open("mrit-player-cache-v12");
+          const cache = await caches.open("mrit-player-cache-v13");
           const cachedResponse = await cache.match(url);
           
           if (cachedResponse && cachedResponse.ok) {
@@ -937,7 +937,7 @@ async function verificarCodigoSalvo() {
             if (codigoEmUso && codigoEmUso.device_id !== deviceId) {
               // CÃ³digo estÃ¡ sendo usado por outro dispositivo
               console.log("âŒ CÃ³digo jÃ¡ em uso por outro dispositivo:", codigoEmUso.device_id, "em", codigoEmUso.local_nome);
-              showNotification(`CÃ³digo jÃ¡ estÃ¡ em uso em: ${codigoEmUso.local_nome || 'outro local'}. Uma tela sÃ³ pode ser usada em um lugar por vez.`);
+              showNotification(`C\u00F3digo j\u00E1 est\u00E1 em uso em: ${codigoEmUso.local_nome || 'outro local'}. Uma tela s\u00F3 pode ser usada em um lugar por vez.`);
               
               // Limpar dispositivo (desativar)
               await client
@@ -1330,7 +1330,7 @@ async function verificarCodigoSalvo() {
             } else {
               // EstÃ¡ locked E nÃ£o Ã© o mesmo dispositivo
               console.log("âš ï¸ CÃ³digo estÃ¡ em uso por outro dispositivo");
-              showNotification("CÃ³digo em uso por outro dispositivo. Aguarde ou insira outro cÃ³digo.");
+              showNotification("C\u00F3digo em uso por outro dispositivo. Aguarde ou insira outro c\u00F3digo.");
               // Limpar cÃ³digo salvo se estiver em uso por outro dispositivo
               localStorage.removeItem(CODIGO_DISPLAY_KEY);
               if (codigoField) codigoField.value = "";
@@ -1340,13 +1340,13 @@ async function verificarCodigoSalvo() {
             console.log("âŒ CÃ³digo nÃ£o encontrado no banco, limpar salvamento");
             localStorage.removeItem(CODIGO_DISPLAY_KEY);
             if (codigoField) codigoField.value = "";
-            showNotification("CÃ³digo salvo nÃ£o Ã© mais vÃ¡lido. Insira um novo cÃ³digo.");
+            showNotification("C\u00F3digo salvo n\u00E3o \u00E9 mais v\u00E1lido. Insira um novo c\u00F3digo.");
             return;
           }
         } catch (err) {
           console.error("Erro ao verificar cÃ³digo no banco:", err);
           // Em caso de erro, manter o cÃ³digo salvo mas nÃ£o iniciar automaticamente
-          showNotification("Erro ao verificar cÃ³digo. Verifique sua conexÃ£o.");
+          showNotification("Erro ao verificar c\u00F3digo. Verifique sua conex\u00E3o.");
         }
       } else {
         // Offline: usar cÃ³digo salvo mesmo sem verificaÃ§Ã£o
@@ -1378,7 +1378,7 @@ async function iniciar() {
   const codigoField = document.getElementById("codigoTela");
   if (!codigoField) {
     console.error('âŒ Campo codigoTela nÃ£o encontrado!');
-    alert('Erro: Campo de cÃ³digo nÃ£o encontrado. Recarregue a pÃ¡gina.');
+    alert('Erro: Campo de c\u00F3digo n\u00E3o encontrado. Recarregue a p\u00E1gina.');
     return;
   }
   
@@ -1387,7 +1387,7 @@ async function iniciar() {
   
   if (!codigo) {
     console.warn('âš ï¸ CÃ³digo vazio');
-    showNotification("Informe o cÃ³digo do display!");
+    showNotification("Informe o c\u00F3digo do display!");
     ensureElementsVisible();
     return;
   }
@@ -1406,13 +1406,13 @@ async function iniciar() {
       
       if (displayError) {
         console.error("âŒ Erro ao buscar display:", displayError);
-        showNotification("Erro ao buscar informaÃ§Ãµes do display. Tente novamente.");
+        showNotification("Erro ao buscar informa\u00E7\u00F5es do display. Tente novamente.");
         ensureElementsVisible();
         return;
       }
       
       if (!display) {
-        showNotification("âŒ CÃ³digo do display nÃ£o encontrado!");
+        showNotification("\u274C C\u00F3digo do display n\u00E3o encontrado!");
         ensureElementsVisible();
         return;
       }
@@ -1421,7 +1421,7 @@ async function iniciar() {
       console.log("âœ… Display encontrado:", display.nome);
     } catch (err) {
       console.error("âŒ Erro ao buscar display:", err);
-      showNotification("Erro ao buscar informaÃ§Ãµes do display. Tente novamente.");
+      showNotification("Erro ao buscar informa\u00E7\u00F5es do display. Tente novamente.");
       ensureElementsVisible();
       return;
     }
@@ -1455,7 +1455,7 @@ async function iniciar() {
           console.log("â„¹ï¸ Tabela dispositivos ainda nÃ£o criada (opcional)");
         } else {
           console.error("âŒ Erro ao verificar cÃ³digo:", checkError);
-          showNotification("Erro ao verificar cÃ³digo. Tente novamente.");
+          showNotification("Erro ao verificar c\u00F3digo. Tente novamente.");
           clearCodeField();
           ensureElementsVisible();
           return;
@@ -1468,7 +1468,7 @@ async function iniciar() {
           console.log("   Device ID atual:", deviceId);
           console.log("   Device ID em uso:", codigoEmUso.device_id);
           console.log("   Local em uso:", codigoEmUso.local_nome);
-          showNotification(`âŒ CÃ³digo jÃ¡ estÃ¡ em uso em: ${codigoEmUso.local_nome || 'outro local'}. Uma tela sÃ³ pode ser usada em um lugar por vez.`);
+          showNotification(`\u274C C\u00F3digo j\u00E1 est\u00E1 em uso em: ${codigoEmUso.local_nome || 'outro local'}. Uma tela s\u00F3 pode ser usada em um lugar por vez.`);
           clearCodeField();
           ensureElementsVisible();
           return; // BLOQUEAR - nÃ£o continua
@@ -1480,7 +1480,7 @@ async function iniciar() {
       }
     } catch (err) {
       console.error("âŒ Erro na validaÃ§Ã£o:", err);
-      showNotification("Erro ao validar cÃ³digo. Tente novamente.");
+      showNotification("Erro ao validar c\u00F3digo. Tente novamente.");
       clearCodeField();
       ensureElementsVisible();
       return;
@@ -1563,7 +1563,7 @@ async function iniciar() {
         console.error("âŒ BLOQUEADO: CÃ³digo foi ocupado enquanto processava (race condition)");
         console.log("   Device ID atual:", deviceId);
         console.log("   Device ID que ocupou:", verificarDuplo.device_id);
-        showNotification(`âŒ CÃ³digo foi ocupado por outro dispositivo em: ${verificarDuplo.local_nome || 'outro local'}. Tente novamente.`);
+          showNotification(`\u274C C\u00F3digo foi ocupado por outro dispositivo em: ${verificarDuplo.local_nome || 'outro local'}. Tente novamente.`);
         clearCodeField();
         ensureElementsVisible();
         return;
@@ -1622,7 +1622,7 @@ async function iniciar() {
           console.error("âŒ BLOQUEADO: CÃ³digo foi ocupado enquanto processava (race condition)");
           console.log("   Device ID atual:", deviceId);
           console.log("   Device ID que ocupou:", verificarNovamente.device_id);
-          showNotification(`âŒ CÃ³digo foi ocupado por outro dispositivo em: ${verificarNovamente.local_nome || 'outro local'}. Tente novamente.`);
+          showNotification(`\u274C C\u00F3digo foi ocupado por outro dispositivo em: ${verificarNovamente.local_nome || 'outro local'}. Tente novamente.`);
           clearCodeField();
           ensureElementsVisible();
           return;
@@ -1668,7 +1668,7 @@ async function iniciar() {
               .update({ is_ativo: false })
               .eq("device_id", deviceId);
             
-            showNotification("âŒ CÃ³digo foi ocupado por outro dispositivo. Tente novamente.");
+            showNotification("\u274C C\u00F3digo foi ocupado por outro dispositivo. Tente novamente.");
             clearCodeField();
             ensureElementsVisible();
             return;
@@ -1752,7 +1752,7 @@ async function iniciar() {
       tocarLoop();
       return;
     } else {
-      showNotification("Sem internet e nenhum cache disponÃ­vel para esta tela.");
+      showNotification("Sem internet e nenhum cache dispon\u00EDvel para esta tela.");
       clearCodeField();
       ensureElementsVisible();
       return;
@@ -1781,7 +1781,7 @@ async function iniciar() {
     }
 
     if (!tela) {
-      showNotification("Tela nÃ£o encontrada!");
+      showNotification("Tela n\u00E3o encontrada!");
       clearCodeField();
       ensureElementsVisible();
       return;
@@ -1801,7 +1801,7 @@ async function iniciar() {
     
     // Verificar se a tela estÃ¡ locked - se estiver E nÃ£o for o mesmo dispositivo, nÃ£o permitir
     if (tela.is_locked && !mesmoDispositivo && !isRestarting) {
-      showNotification("Tela jÃ¡ em uso por outro dispositivo! Por favor, insira outro cÃ³digo.");
+      showNotification("Tela j\u00E1 em uso por outro dispositivo! Por favor, insira outro c\u00F3digo.");
       clearCodeField();
       ensureElementsVisible();
       return;
@@ -1903,7 +1903,7 @@ async function iniciar() {
     await verificarPromocao();
   } catch (err) {
     console.error(err);
-    showNotification("Erro na conexÃ£o com o banco");
+    showNotification("Erro na conex\u00E3o com o banco");
     clearCodeField();
     ensureElementsVisible();
   }
@@ -4724,7 +4724,7 @@ window.mritDebug = {
       return;
     }
     try {
-      const cache = await caches.open("mrit-player-cache-v12");
+      const cache = await caches.open("mrit-player-cache-v13");
       const cachedResponse = await cache.match(url);
       if (cachedResponse && cachedResponse.ok) {
         console.log("âœ… Imagem encontrada no cache:", url);
@@ -4799,8 +4799,8 @@ window.mritDebug = {
     
     let cachedCount = 0;
     let failedCount = 0;
-    const maxVideos = 12;
-    const maxSize = 1024 * 1024 * 1024; // 1GB
+    const maxVideos = 20;
+    const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
     const maxRetries = 5;
     
     for (const item of playlist) {
@@ -4927,7 +4927,7 @@ window.mritDebug = {
       while (!success && retryCount <= maxRetries) {
         try {
           // Verificar se jÃ¡ estÃ¡ em cache
-          const cache = await caches.open("mrit-player-cache-v12");
+          const cache = await caches.open("mrit-player-cache-v13");
           const cachedResponse = await cache.match(url);
           
           if (cachedResponse && cachedResponse.ok) {

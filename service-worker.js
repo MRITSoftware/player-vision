@@ -23,7 +23,7 @@ let OFFLINE_TEST = false;
 let CURRENT_NS = "global"; // namespace da tela (ex.: CÓDIGO)
 
 // Limites de cache (simples e efetivos)
-const MAX_VIDEOS_PER_NS = 50;       // até 50 vídeos por tela (aumentado para dispositivos com mais memória)
+const MAX_VIDEOS_PER_NS = 80;       // até 80 vídeos por tela
 const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por vídeo (aumentado para suportar vídeos maiores)
 
 function dlog(...args) { if (DEBUG_LOG) console.log("[SW]", ...args); }
