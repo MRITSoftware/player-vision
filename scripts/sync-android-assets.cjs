@@ -74,6 +74,13 @@ async function run() {
     // Adaptive icon (Android 8+): usado na miniatura da home e gaveta de apps.
     await writeAdaptiveForeground(icon192, path.join(resDir, "drawable", "ic_launcher_foreground.png"));
     await writeAdaptiveForeground(icon192, path.join(resDir, "drawable", "ic_launcher_foreground_round.png"));
+    // O template Android cria drawable-v24/ic_launcher_foreground.xml (ícone genérico do Android).
+    // Em API 24+, esse XML pode sobrescrever nosso PNG customizado com o mesmo resource name.
+    // Removemos para garantir que o launcher use o ícone gerado a partir de icon-192.png.
+    const v24ForegroundXml = path.join(resDir, "drawable-v24", "ic_launcher_foreground.xml");
+    if (fs.existsSync(v24ForegroundXml)) {
+      fs.unlinkSync(v24ForegroundXml);
+    }
 
     writeText(
       path.join(resDir, "drawable", "ic_launcher_background.xml"),
