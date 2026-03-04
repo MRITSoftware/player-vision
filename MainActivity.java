@@ -16,6 +16,7 @@ public class MainActivity extends BridgeActivity {
     
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(MritExoPlayerPlugin.class);
         super.onCreate(savedInstanceState);
         
         // Manter tela ligada
