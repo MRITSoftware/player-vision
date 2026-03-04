@@ -180,7 +180,7 @@ public class MritExoPlayerPlugin extends Plugin {
             Iterator<String> keys = extra.keys();
             while (keys.hasNext()) {
                 String key = keys.next();
-                payload.put(key, extra.get(key));
+                payload.put(key, extra.opt(key));
             }
         }
         notifyListeners("state", payload);
