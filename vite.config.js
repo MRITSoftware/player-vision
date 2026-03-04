@@ -35,6 +35,21 @@ export default defineConfig({
           copyFileSync(visionLogoPath, visionLogoDistPath);
           console.log('✅ vision_logo.png copiado para dist/');
         }
+
+        // Copiar ícones usados por PWA/Capacitor para a raiz do dist
+        const icon192Path = resolve(__dirname, 'icon-192.png');
+        const icon192DistPath = resolve(__dirname, 'dist', 'icon-192.png');
+        if (existsSync(icon192Path)) {
+          copyFileSync(icon192Path, icon192DistPath);
+          console.log('✅ icon-192.png copiado para dist/');
+        }
+
+        const icon512Path = resolve(__dirname, 'icon-512.png');
+        const icon512DistPath = resolve(__dirname, 'dist', 'icon-512.png');
+        if (existsSync(icon512Path)) {
+          copyFileSync(icon512Path, icon512DistPath);
+          console.log('✅ icon-512.png copiado para dist/');
+        }
       }
     }
   ]

@@ -45,6 +45,14 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+echo 🎨 Aplicando icone e splash no Android...
+call node scripts\sync-android-assets.cjs
+
+if %ERRORLEVEL% NEQ 0 (
+    echo ❌ Erro ao aplicar icone/splash Android
+    exit /b 1
+)
+
 echo.
 echo ✅ Build concluído com sucesso!
 echo.

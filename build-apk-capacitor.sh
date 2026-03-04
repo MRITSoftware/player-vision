@@ -43,6 +43,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo "🎨 Aplicando ícone e splash no Android..."
+node scripts/sync-android-assets.cjs
+
+if [ $? -ne 0 ]; then
+    echo "❌ Erro ao aplicar ícone/splash Android"
+    exit 1
+fi
+
 echo ""
 echo "✅ Build concluído com sucesso!"
 echo ""

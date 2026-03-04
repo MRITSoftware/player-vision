@@ -22,7 +22,7 @@ module.exports = {
       showSpinner: false,
       splashFullScreen: true,
       splashImmersive: true,
-      imageUrl: "vision_logo.png"
+      imageUrl: "icon-512.png"
     },
     StatusBar: {
       style: "DARK",
