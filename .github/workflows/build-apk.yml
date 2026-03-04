@@ -47,6 +47,9 @@ jobs:
       
     - name: Sincronizar Capacitor
       run: npx cap sync android
+
+    - name: Aplicar icon e splash Android
+      run: node scripts/sync-android-assets.cjs
       
     - name: Copiar MainActivity.java para o projeto Android
       run: |
