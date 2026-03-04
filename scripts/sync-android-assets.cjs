@@ -26,6 +26,25 @@ async function writePng(src, dest, size) {
   }
 }
 
+async function writeAdaptiveForeground(src, dest) {
+  ensureDir(path.dirname(dest));
+  if (!sharp) {
+    fs.copyFileSync(src, dest);
+    return;
+  }
+  // Tamanho ideal do foreground para adaptive icon.
+  // "contain" evita cortar logo ao aplicar máscara do launcher.
+  await sharp(src)
+    .resize(432, 432, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toFile(dest);
+}
+
+function writeText(dest, content) {
+  ensureDir(path.dirname(dest));
+  fs.writeFileSync(dest, content, "utf8");
+}
+
 async function run() {
   if (!fs.existsSync(resDir)) {
     console.log("[assets] Pasta android/res não encontrada. Pulei geração de assets Android.");
@@ -52,7 +71,35 @@ async function run() {
       await writePng(icon192, path.join(resDir, folder, "ic_launcher.png"), size);
       await writePng(icon192, path.join(resDir, folder, "ic_launcher_round.png"), size);
     }
-    console.log("[assets] Ícones Android atualizados a partir de icon-192.png.");
+    // Adaptive icon (Android 8+): usado na miniatura da home e gaveta de apps.
+    await writeAdaptiveForeground(icon192, path.join(resDir, "drawable", "ic_launcher_foreground.png"));
+    await writeAdaptiveForeground(icon192, path.join(resDir, "drawable", "ic_launcher_foreground_round.png"));
+
+    writeText(
+      path.join(resDir, "drawable", "ic_launcher_background.xml"),
+      `<?xml version="1.0" encoding="utf-8"?>
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FFFFFF"/>
+</shape>
+`
+    );
+
+    const adaptiveXml = `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+</adaptive-icon>
+`;
+    const adaptiveRoundXml = `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground_round"/>
+</adaptive-icon>
+`;
+    writeText(path.join(resDir, "mipmap-anydpi-v26", "ic_launcher.xml"), adaptiveXml);
+    writeText(path.join(resDir, "mipmap-anydpi-v26", "ic_launcher_round.xml"), adaptiveRoundXml);
+
+    console.log("[assets] Ícones Android (legacy + adaptive) atualizados a partir de icon-192.png.");
   }
 
   if (fs.existsSync(icon512)) {
