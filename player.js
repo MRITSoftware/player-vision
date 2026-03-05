@@ -330,6 +330,35 @@ function isVideoItem(item, itemUrl) {
     /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(itemUrl);
 }
 
+function isImageItem(item, itemUrl) {
+  const tipo = (item?.tipo || "").toLowerCase();
+  return tipo.includes("imagem") ||
+    /\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?|$)/i.test(itemUrl);
+}
+
+async function nativePreloadUpcomingItem(baseIndex) {
+  if (!isNativeMediaModeActive()) return;
+  const plugin = getNativeExoPlugin();
+  if (!plugin || !Array.isArray(playlist) || playlist.length < 2) return;
+
+  try {
+    const nextIndex = (baseIndex + 1) % playlist.length;
+    const nextItem = playlist[nextIndex];
+    if (!nextItem || !nextItem.url) return;
+    const nextUrl = pickSourceForOrientation(nextItem);
+    if (!nextUrl || isItemOnCooldown(nextUrl)) return;
+
+    const tipo = isImageItem(nextItem, nextUrl) ? "imagem" : "video";
+    await nativeCallWithTimeout(plugin.preload({
+      url: nextUrl,
+      tipo,
+      token: String(playToken || 0),
+    }), 1200);
+  } catch {
+    // best effort
+  }
+}
+
 async function preloadUpcomingVideoInBuffer(baseIndex) {
   try {
     if (preloadingBuffer || !playlist.length) return;
@@ -2375,6 +2404,7 @@ async function tocarLoop() {
     const nativeOnlyMode = isNativeMediaModeActive();
     const nativeStarted = await tryPlayWithNativeExo(item, itemUrl, myToken);
     if (nativeStarted) {
+      nativePreloadUpcomingItem(currentIndex).catch(() => {});
       return;
     }
     if (nativeOnlyMode) {
@@ -2608,6 +2638,7 @@ async function tocarLoop() {
   if (isNativeMediaModeActive()) {
     const nativeImageStarted = await tryShowImageNative(item, itemUrl, myToken);
     if (nativeImageStarted) {
+      nativePreloadUpcomingItem(currentIndex).catch(() => {});
       const imageDuration = (typeof duration === "number" && duration > 0) ? duration : 15000;
       if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
       img.timeoutId = setTimeout(() => {
@@ -3062,21 +3093,23 @@ function proximoItem() {
   const indexAnterior = currentIndex;
   currentIndex = (currentIndex + 1) % playlist.length;
   const cicloCompleto = indexAnterior === playlist.length - 1 && currentIndex === 0;
+
+  // Mantem playlist atualizada durante a rotacao (novo item/reordem/remocao)
+  if (navigator.onLine && currentPlaylistId) {
+    const now = Date.now();
+    if (now - lastCycleRefreshAt >= 5000) {
+      lastCycleRefreshAt = now;
+      verificarMudancasPlaylistEmBackground(currentPlaylistId, currentPlaylistId).catch(err => {
+        console.error("❌ Erro ao verificar mudancas da playlist:", err);
+      });
+    }
+  }
   
   // Ao fim de cada ciclo, verificar se cÃ³digo mudou na tabela dispositivos
   if (cicloCompleto && navigator.onLine) {
     console.log("ðŸ”„ Ciclo completo: verificando em background sem bloquear troca.");
     verificarCodigoDispositivoAoCiclo().then((mudou) => {
       if (mudou) return;
-      if (!currentPlaylistId) return;
-      const now = Date.now();
-      if (now - lastCycleRefreshAt < 30000) return; // throttle
-      lastCycleRefreshAt = now;
-
-      console.log("ðŸ”„ Verificando mudanÃ§as de playlist em background...");
-      verificarMudancasPlaylistEmBackground(currentPlaylistId, currentPlaylistId).catch(err => {
-        console.error("âŒ Erro ao verificar mudanÃ§as da playlist:", err);
-      });
     }).catch(err => {
       console.warn("âš ï¸ Erro na verificaÃ§Ã£o de ciclo:", err);
     });
