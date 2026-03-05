@@ -2319,9 +2319,20 @@ async function tocarLoop() {
         nextVideo.load();
         // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB
         // Reduzir timeout quando não é primeiro ciclo (cache já está pronto)
-        const timeout = isFirstCycle ? 6000 : 3000;
+        // Se estiver offline, usar timeout ainda menor para detectar falha rapidamente
+        let timeout = isFirstCycle ? 6000 : 3000;
+        if (!navigator.onLine) {
+          // Offline: timeout muito curto para detectar rapidamente se não está em cache
+          timeout = 2000;
+        }
         const ok = await waitForVideoReady(nextVideo, timeout);
-        if (!ok || nextVideo.readyState < 3) throw new Error("video nao pronto");
+        if (!ok || nextVideo.readyState < 3) {
+          // Se está offline e não carregou, provavelmente não está em cache
+          if (!navigator.onLine) {
+            console.warn("⚠️ Vídeo não carregou offline - provavelmente não está em cache:", itemUrl);
+          }
+          throw new Error("video nao pronto");
+        }
       }
 
       if (myToken !== playToken || videoToken !== currentVideoToken) {
@@ -2621,9 +2632,52 @@ function waitForCanPlay(videoEl, timeoutMs = 7000) {
     
     let done = false;
     const onCanPlay = () => { if (!done) { done = true; cleanup(); resolve(true); } };
-    const t = setTimeout(() => { if (!done) { done = true; cleanup(); resolve(false); } }, adaptiveTimeout);
-    function cleanup() { clearTimeout(t); videoEl.removeEventListener("canplay", onCanPlay); }
+    const onError = () => { 
+      if (!done) { 
+        done = true; 
+        cleanup(); 
+        console.warn("[waitForCanPlay] Erro ao carregar vídeo:", videoEl.error?.message || "erro desconhecido");
+        resolve(false); 
+      } 
+    };
+    const onStalled = () => {
+      // Se o vídeo ficar travado por muito tempo sem progresso, considerar como falha
+      // Isso é especialmente importante quando offline e o vídeo não está em cache
+      if (!done && videoEl.readyState < 3) {
+        // Verificar novamente após um delay curto
+        setTimeout(() => {
+          if (!done && videoEl.readyState < 3 && !navigator.onLine) {
+            console.warn("[waitForCanPlay] Vídeo travado e offline, provavelmente não está em cache");
+            done = true;
+            cleanup();
+            resolve(false);
+          }
+        }, 2000);
+      }
+    };
+    
+    const t = setTimeout(() => { 
+      if (!done) { 
+        done = true; 
+        cleanup(); 
+        // Se está offline e não carregou, provavelmente não está em cache
+        if (!navigator.onLine && videoEl.readyState < 3) {
+          console.warn("[waitForCanPlay] Timeout offline - vídeo provavelmente não está em cache");
+        }
+        resolve(false); 
+      } 
+    }, adaptiveTimeout);
+    
+    function cleanup() { 
+      clearTimeout(t); 
+      videoEl.removeEventListener("canplay", onCanPlay); 
+      videoEl.removeEventListener("error", onError);
+      videoEl.removeEventListener("stalled", onStalled);
+    }
+    
     videoEl.addEventListener("canplay", onCanPlay, { once: true });
+    videoEl.addEventListener("error", onError, { once: true });
+    videoEl.addEventListener("stalled", onStalled, { once: true });
   });
 }
 
