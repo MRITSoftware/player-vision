@@ -157,7 +157,7 @@ self.addEventListener("fetch", (event) => {
 
   const isHlsManifest = /\.m3u8(\?|$)/i.test(pathname);
   const isHlsSegment = /\.(m4s|ts)(\?|$)/i.test(pathname);
-  const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(pathname);
+  const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(pathname);
   const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(pathname);
   const hasRange = req.headers.has("range");
   const storageUrl = isSupabaseStorageURL(url);
@@ -189,9 +189,10 @@ self.addEventListener("fetch", (event) => {
         if (blob) return { blob, key };
 
         // 2) Tentar sem query params (caso tenha sido salvo sem query params)
+        let urlWithoutQuery = null;
         try {
           const urlObj = new URL(url);
-          const urlWithoutQuery = `${urlObj.origin}${urlObj.pathname}`;
+          urlWithoutQuery = `${urlObj.origin}${urlObj.pathname}`;
           if (urlWithoutQuery !== url) {
             key = nsKey(urlWithoutQuery);
             blob = await idbGet(key);
@@ -209,6 +210,29 @@ self.addEventListener("fetch", (event) => {
           if (blob) {
             dlog("vídeo encontrado no cache global (fallback):", url);
             return { blob, key };
+          }
+
+          if (urlWithoutQuery && urlWithoutQuery !== url) {
+            key = `global::${urlWithoutQuery}`;
+            blob = await idbGet(key);
+            if (blob) {
+              dlog("vídeo encontrado no cache global sem query (fallback):", urlWithoutQuery);
+              return { blob, key };
+            }
+          }
+        }
+
+        // 4) Fallback final: procurar em qualquer namespace (evita miss quando NS reinicia)
+        const keys = await idbAllKeys();
+        const suffixes = [String(url)];
+        if (urlWithoutQuery && urlWithoutQuery !== url) suffixes.push(String(urlWithoutQuery));
+        for (const rawKey of keys) {
+          const ks = String(rawKey);
+          if (!suffixes.some(s => ks.endsWith(`::${s}`))) continue;
+          blob = await idbGet(ks);
+          if (blob) {
+            dlog("vídeo encontrado em outro namespace (fallback):", ks);
+            return { blob, key: ks };
           }
         }
 
@@ -615,7 +639,7 @@ async function updateCacheForCurrentNS(playlist) {
         continue;
       }
 
-      if (/\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url)) {
+      if (/\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url)) {
         if (cachedCount >= MAX_VIDEOS_PER_NS) {
           dlog("limite de vídeos em cache atingido para NS", CURRENT_NS);
           continue;
@@ -687,6 +711,8 @@ async function updateCacheForCurrentNS(playlist) {
     }
   }
 }
+}
+
 
 // ===== Utils =====
 function guessContentType(pathname) {
@@ -695,6 +721,10 @@ function guessContentType(pathname) {
   if (/\.mov$/i.test(pathname)) return "video/quicktime";
   if (/\.mkv$/i.test(pathname)) return "video/x-matroska";
   if (/\.avi$/i.test(pathname)) return "video/x-msvideo";
+  if (/\.m4v$/i.test(pathname)) return "video/x-m4v";
+  if (/\.3gp$/i.test(pathname)) return "video/3gpp";
+  if (/\.flv$/i.test(pathname)) return "video/x-flv";
+  if (/\.wmv$/i.test(pathname)) return "video/x-ms-wmv";
   if (/\.m3u8$/i.test(pathname)) return "application/vnd.apple.mpegurl";
   if (/\.(m4s|ts)$/i.test(pathname)) return "video/mp2t";
   if (/\.jpg$/i.test(pathname) || /\.jpeg$/i.test(pathname)) return "image/jpeg";

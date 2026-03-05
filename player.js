@@ -142,6 +142,25 @@ function isNativeAndroid() {
   }
 }
 
+// Compat: em algumas builds não existe player nativo; manter no-op para não quebrar fluxos de stop.
+async function stopNativeVideoPlayback() {
+  try {
+    const directFn = window.stopNativeVideoPlayback;
+    if (typeof directFn === "function") {
+      await directFn();
+      return;
+    }
+
+    const nativeVideo = window?.Capacitor?.Plugins?.NativeVideo;
+    if (nativeVideo && typeof nativeVideo.stop === "function") {
+      await nativeVideo.stop();
+      return;
+    }
+  } catch (err) {
+    console.warn("⚠️ Falha ao parar player nativo:", err);
+  }
+}
+
 function startPlaybackWatchdog(videoEl, token, itemUrl) {
   stopPlaybackWatchdog();
 
@@ -621,7 +640,7 @@ async function verificarEAtualizarStatusCache() {
     // Verificar cada item da playlist
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+      const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
       const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
       
       if (isVideo) {
@@ -4764,7 +4783,7 @@ window.mritDebug = {
     console.log("ðŸ” Verificando cache para todos os itens da playlist...");
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+      const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
       const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
       
       if (isVideo) {
@@ -4832,7 +4851,7 @@ window.mritDebug = {
       }
       
       const url = pickSourceForOrientation(item);
-      const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+      const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
       
       if (!isVideo) {
         console.log("â­ï¸ Pulando item nÃ£o-vÃ­deo:", url);
@@ -5093,7 +5112,7 @@ window.mritDebug = {
     if (playlist && playlist.length > 0) {
       const videos = playlist.filter(item => {
         const url = pickSourceForOrientation(item);
-        return /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+        return /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
       });
       const imagens = playlist.filter(item => {
         const url = pickSourceForOrientation(item);
@@ -5108,7 +5127,7 @@ window.mritDebug = {
     if (playlist && playlist.length > 0) {
       for (const item of playlist) {
         const url = pickSourceForOrientation(item);
-        const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+        const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
         const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
         if (isVideo) {
           await this.checkCache(url);
