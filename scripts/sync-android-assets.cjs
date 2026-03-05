@@ -87,7 +87,6 @@ function syncNativeExoPlayer() {
   const pluginJava = `package com.mritsoftware.player;
 
 import android.net.Uri;
-import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
@@ -109,35 +108,45 @@ import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
 import com.google.android.exoplayer2.Player;
+import com.google.android.exoplayer2.database.StandaloneDatabaseProvider;
+import com.google.android.exoplayer2.source.MediaSource;
+import com.google.android.exoplayer2.source.ProgressiveMediaSource;
+import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.ui.AspectRatioFrameLayout;
 import com.google.android.exoplayer2.ui.PlayerView;
+import com.google.android.exoplayer2.upstream.DataSpec;
+import com.google.android.exoplayer2.upstream.DefaultDataSource;
+import com.google.android.exoplayer2.upstream.cache.CacheDataSource;
+import com.google.android.exoplayer2.upstream.cache.CacheWriter;
+import com.google.android.exoplayer2.upstream.cache.LeastRecentlyUsedCacheEvictor;
+import com.google.android.exoplayer2.upstream.cache.SimpleCache;
 
+import java.io.File;
 import java.util.Iterator;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 @CapacitorPlugin(name = "MritExoPlayer")
 public class MritExoPlayerPlugin extends Plugin {
     private ExoPlayer player;
-    private ExoPlayer preloadPlayer;
     private PlayerView playerView;
     private ImageView imageView;
     private FrameLayout overlay;
     private String currentToken = "";
     private String currentUrl = "";
     private boolean initialized = false;
-    private boolean pendingVideoReveal = false;
-    private boolean preloadedReady = false;
-    private String preloadedUrl = "";
+    private SimpleCache simpleCache;
+    private CacheDataSource.Factory cacheDataSourceFactory;
+    private ExecutorService preloadExecutor;
+    private Future<?> preloadFuture;
+    private static final long CACHE_MAX_BYTES = 700L * 1024L * 1024L;
+    private static final long PRELOAD_VIDEO_BYTES = 8L * 1024L * 1024L;
 
-    private final Player.Listener activePlayerListener = new Player.Listener() {
+    private final Player.Listener playerListener = new Player.Listener() {
         @Override
         public void onPlaybackStateChanged(int state) {
             if (state == Player.STATE_READY) {
-                if (pendingVideoReveal) {
-                    pendingVideoReveal = false;
-                    try { Glide.with(getActivity()).clear(imageView); } catch (Exception ignored) {}
-                    if (imageView != null) imageView.setImageDrawable(null);
-                    showVideoLayer();
-                }
                 emitState("ready", null);
             } else if (state == Player.STATE_ENDED) {
                 emitState("ended", null);
@@ -154,27 +163,25 @@ public class MritExoPlayerPlugin extends Plugin {
         }
     };
 
-    private final Player.Listener preloadPlayerListener = new Player.Listener() {
-        @Override
-        public void onPlaybackStateChanged(int state) {
-            if (state == Player.STATE_READY) {
-                preloadedReady = true;
-            }
-        }
-
-        @Override
-        public void onPlayerError(@NonNull PlaybackException error) {
-            preloadedReady = false;
-            preloadedUrl = "";
-        }
-    };
-
     private void ensureInitialized() {
         if (initialized) return;
         player = new ExoPlayer.Builder(getActivity()).build();
-        player.addListener(activePlayerListener);
-        preloadPlayer = new ExoPlayer.Builder(getActivity()).build();
-        preloadPlayer.addListener(preloadPlayerListener);
+        player.addListener(playerListener);
+        if (preloadExecutor == null) preloadExecutor = Executors.newSingleThreadExecutor();
+        if (cacheDataSourceFactory == null) {
+            File cacheDir = new File(getActivity().getCacheDir(), "mrit_exo_cache");
+            if (!cacheDir.exists()) cacheDir.mkdirs();
+            simpleCache = new SimpleCache(
+                    cacheDir,
+                    new LeastRecentlyUsedCacheEvictor(CACHE_MAX_BYTES),
+                    new StandaloneDatabaseProvider(getActivity())
+            );
+            DefaultDataSource.Factory upstreamFactory = new DefaultDataSource.Factory(getActivity());
+            cacheDataSourceFactory = new CacheDataSource.Factory()
+                    .setCache(simpleCache)
+                    .setUpstreamDataSourceFactory(upstreamFactory)
+                    .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR);
+        }
 
         imageView = new ImageView(getActivity());
         imageView.setLayoutParams(new FrameLayout.LayoutParams(
@@ -189,7 +196,6 @@ public class MritExoPlayerPlugin extends Plugin {
         playerView.setPlayer(player);
         playerView.setKeepScreenOn(true);
         playerView.setKeepContentOnPlayerReset(true);
-        playerView.setShutterBackgroundColor(Color.TRANSPARENT);
         playerView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -208,6 +214,14 @@ public class MritExoPlayerPlugin extends Plugin {
         ViewGroup root = getActivity().findViewById(android.R.id.content);
         root.addView(overlay);
         initialized = true;
+    }
+
+    private MediaSource buildMediaSource(String url) {
+        MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
+        if (url != null && url.toLowerCase().contains(".m3u8")) {
+            return new HlsMediaSource.Factory(cacheDataSourceFactory).createMediaSource(mediaItem);
+        }
+        return new ProgressiveMediaSource.Factory(cacheDataSourceFactory).createMediaSource(mediaItem);
     }
 
     private void setResizeMode(String fit) {
@@ -277,38 +291,9 @@ public class MritExoPlayerPlugin extends Plugin {
                 currentToken = token;
                 currentUrl = url;
                 setResizeMode(fit);
-                boolean canUsePreloaded = preloadedReady && url.equals(preloadedUrl);
-                if (canUsePreloaded) {
-                    player.removeListener(activePlayerListener);
-                    preloadPlayer.removeListener(preloadPlayerListener);
-                    ExoPlayer oldActive = player;
-                    player = preloadPlayer;
-                    preloadPlayer = oldActive;
-                    player.addListener(activePlayerListener);
-                    preloadPlayer.addListener(preloadPlayerListener);
-                    playerView.setPlayer(player);
-                    preloadedReady = false;
-                    preloadedUrl = "";
-                    try {
-                        preloadPlayer.stop();
-                        preloadPlayer.clearMediaItems();
-                    } catch (Exception ignored) {}
-                    pendingVideoReveal = false;
-                    try { Glide.with(getActivity()).clear(imageView); } catch (Exception ignored) {}
-                    if (imageView != null) imageView.setImageDrawable(null);
-                    showVideoLayer();
-                    player.seekTo(0);
-                    player.setVolume((muted != null && muted) ? 0f : 1f);
-                    player.play();
-                    emitState("ready", null);
-                    emitState("play_requested", null);
-                    JSObject ret = new JSObject();
-                    ret.put("ok", true);
-                    call.resolve(ret);
-                    return;
-                }
-                pendingVideoReveal = true;
-                player.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
+                showVideoLayer();
+                Glide.with(getActivity()).clear(imageView);
+                player.setMediaSource(buildMediaSource(url), true);
                 player.prepare();
                 player.setVolume((muted != null && muted) ? 0f : 1f);
                 player.play();
@@ -341,7 +326,13 @@ public class MritExoPlayerPlugin extends Plugin {
                     call.resolve(ret);
                     return;
                 }
-
+                if (url.toLowerCase().contains(".m3u8")) {
+                    JSObject ret = new JSObject();
+                    ret.put("ok", true);
+                    ret.put("skipped", "hls_preload_not_supported");
+                    call.resolve(ret);
+                    return;
+                }
                 if (url.equals(currentUrl)) {
                     JSObject ret = new JSObject();
                     ret.put("ok", true);
@@ -349,30 +340,27 @@ public class MritExoPlayerPlugin extends Plugin {
                     call.resolve(ret);
                     return;
                 }
-
-                if (url.equals(preloadedUrl) && preloadedReady) {
-                    JSObject ret = new JSObject();
-                    ret.put("ok", true);
-                    ret.put("skipped", "already_preloaded");
-                    call.resolve(ret);
-                    return;
-                }
-
-                preloadedReady = false;
-                preloadedUrl = url;
-                preloadPlayer.stop();
-                preloadPlayer.clearMediaItems();
-                preloadPlayer.setMediaItem(MediaItem.fromUri(Uri.parse(url)));
-                preloadPlayer.prepare();
-                preloadPlayer.seekTo(0);
-                preloadPlayer.pause();
-
+                if (preloadFuture != null) preloadFuture.cancel(true);
+                final String preloadUrl = url;
+                preloadFuture = preloadExecutor.submit(() -> {
+                    try {
+                        DataSpec dataSpec = new DataSpec.Builder()
+                                .setUri(Uri.parse(preloadUrl))
+                                .setLength(PRELOAD_VIDEO_BYTES)
+                                .build();
+                        CacheWriter writer = new CacheWriter(
+                                cacheDataSourceFactory.createDataSourceForDownloading(),
+                                dataSpec,
+                                null,
+                                null
+                        );
+                        writer.cache();
+                    } catch (Exception ignored) {}
+                });
                 JSObject ret = new JSObject();
                 ret.put("ok", true);
                 call.resolve(ret);
             } catch (Exception e) {
-                preloadedReady = false;
-                preloadedUrl = "";
                 call.reject("preload failed: " + e.getMessage(), e);
             }
         });
@@ -395,7 +383,11 @@ public class MritExoPlayerPlugin extends Plugin {
                 currentToken = token;
                 currentUrl = url;
                 setImageFit(fit);
-                final String requestToken = token;
+                if (player != null) {
+                    player.pause();
+                    player.clearMediaItems();
+                }
+                showImageLayer();
 
                 Glide.with(getActivity())
                         .load(url)
@@ -403,14 +395,7 @@ public class MritExoPlayerPlugin extends Plugin {
                         .into(new CustomTarget<Drawable>() {
                             @Override
                             public void onResourceReady(@NonNull Drawable resource, @Nullable Transition<? super Drawable> transition) {
-                                if (!String.valueOf(requestToken).equals(currentToken)) return;
                                 imageView.setImageDrawable(resource);
-                                if (player != null) {
-                                    player.pause();
-                                    player.clearMediaItems();
-                                }
-                                pendingVideoReveal = false;
-                                showImageLayer();
                                 emitState("image_ready", null);
                                 JSObject ret = new JSObject();
                                 ret.put("ok", true);
@@ -424,7 +409,6 @@ public class MritExoPlayerPlugin extends Plugin {
 
                             @Override
                             public void onLoadFailed(@Nullable Drawable errorDrawable) {
-                                if (!String.valueOf(requestToken).equals(currentToken)) return;
                                 imageView.setImageDrawable(errorDrawable);
                                 JSObject extra = new JSObject();
                                 extra.put("message", "image_load_failed");
@@ -446,9 +430,9 @@ public class MritExoPlayerPlugin extends Plugin {
                     player.stop();
                     player.clearMediaItems();
                 }
-                if (preloadPlayer != null) {
-                    preloadPlayer.stop();
-                    preloadPlayer.clearMediaItems();
+                if (preloadFuture != null) {
+                    preloadFuture.cancel(true);
+                    preloadFuture = null;
                 }
                 if (imageView != null) {
                     Glide.with(getActivity()).clear(imageView);
@@ -477,15 +461,23 @@ public class MritExoPlayerPlugin extends Plugin {
     protected void handleOnDestroy() {
         super.handleOnDestroy();
         if (player != null) {
-            player.removeListener(activePlayerListener);
+            player.removeListener(playerListener);
             player.release();
             player = null;
         }
-        if (preloadPlayer != null) {
-            preloadPlayer.removeListener(preloadPlayerListener);
-            preloadPlayer.release();
-            preloadPlayer = null;
+        if (preloadFuture != null) {
+            preloadFuture.cancel(true);
+            preloadFuture = null;
         }
+        if (preloadExecutor != null) {
+            preloadExecutor.shutdownNow();
+            preloadExecutor = null;
+        }
+        if (simpleCache != null) {
+            try { simpleCache.release(); } catch (Exception ignored) {}
+            simpleCache = null;
+        }
+        cacheDataSourceFactory = null;
         if (imageView != null) {
             try { Glide.with(getActivity()).clear(imageView); } catch (Exception ignored) {}
             imageView = null;

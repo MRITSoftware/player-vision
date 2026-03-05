@@ -353,7 +353,7 @@ async function nativePreloadUpcomingItem(baseIndex) {
       url: nextUrl,
       tipo,
       token: String(playToken || 0),
-    }), 1200);
+    }), 1000);
   } catch {
     // best effort
   }
