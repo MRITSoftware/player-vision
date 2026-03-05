@@ -1774,13 +1774,44 @@ async function iniciar() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(checarLockEConteudo, POLLING_MS);
     
-  // VerificaÃ§Ã£o periÃ³dica do cache (a cada 60 segundos)
+  // Verificação periódica do cache (a cada 60 segundos, ou 15 segundos se houver vídeos faltando)
   if (cacheCheckTimer) clearInterval(cacheCheckTimer);
-  cacheCheckTimer = setInterval(async () => {
-    if (codigoAtual && playlist && playlist.length > 0) {
-      await verificarEAtualizarStatusCache();
+  let cacheCheckInterval = 60000; // 60 segundos por padrão
+  let cacheCheckInProgress = false; // Flag para evitar execuções simultâneas
+  
+  const verificarCachePeriodicamente = async () => {
+    // Evitar execuções simultâneas
+    if (cacheCheckInProgress) {
+      console.log("⏳ Verificação de cache já em andamento, pulando...");
+      return;
     }
-  }, 60000);
+    
+    if (codigoAtual && playlist && playlist.length > 0) {
+      cacheCheckInProgress = true;
+      try {
+        const cachePronto = await verificarEAtualizarStatusCache();
+        
+        // Se o cache não está pronto, verificar mais frequentemente (15 segundos)
+        // Isso garante que quando a internet voltar, o cache seja retomado rapidamente
+        if (!cachePronto && cacheCheckInterval !== 15000) {
+          cacheCheckInterval = 15000;
+          if (cacheCheckTimer) clearInterval(cacheCheckTimer);
+          cacheCheckTimer = setInterval(verificarCachePeriodicamente, cacheCheckInterval);
+          console.log("🔄 Cache incompleto detectado, aumentando frequência de verificação para 15 segundos");
+        } else if (cachePronto && cacheCheckInterval !== 60000) {
+          // Se o cache estiver pronto, voltar para verificação a cada 60 segundos
+          cacheCheckInterval = 60000;
+          if (cacheCheckTimer) clearInterval(cacheCheckTimer);
+          cacheCheckTimer = setInterval(verificarCachePeriodicamente, cacheCheckInterval);
+          console.log("✅ Cache completo, voltando para verificação a cada 60 segundos");
+        }
+      } finally {
+        cacheCheckInProgress = false;
+      }
+    }
+  };
+  
+  cacheCheckTimer = setInterval(verificarCachePeriodicamente, cacheCheckInterval);
 
     // Verificar promoÃ§Ã£o apÃ³s carregar conteÃºdo
     await verificarPromocao();
@@ -3842,10 +3873,13 @@ if ('serviceWorker' in navigator) {
           );
           event.ports[0].postMessage({ valid: isValid });
         } else if (event.data.action === "cacheUpdated") {
-          console.log("ðŸ“¦ Cache atualizado pelo Service Worker");
-          // Atualizar status do cache no banco
+          console.log("ðŸ"¦ Cache atualizado pelo Service Worker");
+          // Verificar se o cache está realmente completo antes de marcar como pronto
+          // Aguardar um pouco para dar tempo do Service Worker terminar de processar
           if (codigoAtual) {
-            atualizarStatusCache(codigoAtual, true);
+            setTimeout(async () => {
+              await verificarEAtualizarStatusCache();
+            }, 3000);
           }
         }
       });
@@ -3943,6 +3977,26 @@ window.addEventListener("online", () => {
       pendingResync = true;
     } else if (codigoAtual) {
       await carregarConteudo(currentPlaylistId || codigoAtual);
+    }
+    
+    // IMPORTANTE: Verificar e retomar cache quando a internet voltar
+    // Isso garante que vídeos que falharam durante a queda de internet sejam baixados novamente
+    if (codigoAtual && playlist && playlist.length > 0) {
+      console.log("🔄 Retomando verificação de cache após internet voltar...");
+      
+      // Notificar o Service Worker para retomar downloads
+      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          action: "updateCache",
+          playlist: playlist
+        });
+        console.log("📤 Notificação enviada ao Service Worker para retomar cache");
+      }
+      
+      // Aguardar um pouco para garantir que a conexão está estável
+      setTimeout(async () => {
+        await verificarEAtualizarStatusCache();
+      }, 2000);
     }
   }, 1200);
 });
@@ -4767,8 +4821,8 @@ window.mritDebug = {
     
     let cachedCount = 0;
     let failedCount = 0;
-    const maxVideos = 20;
-    const maxSize = 2 * 1024 * 1024 * 1024; // 2GB
+    const maxVideos = 80; // Alinhado com Service Worker (MAX_VIDEOS_PER_NS)
+    const maxSize = 5 * 1024 * 1024 * 1024; // 5GB (alinhado com Service Worker MAX_VIDEO_BYTES)
     const maxRetries = 5;
     
     for (const item of playlist) {
@@ -4811,7 +4865,7 @@ window.mritDebug = {
           
           // Baixar vÃ­deo com timeout maior
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 segundos
+          const timeoutId = setTimeout(() => controller.abort(), 120000); // 120 segundos (aumentado para suportar internet lenta)
           
           const response = await fetch(url, { 
             method: 'GET',
@@ -4862,10 +4916,9 @@ window.mritDebug = {
     
     console.log(`ðŸŽ‰ Cache concluÃ­do: ${cachedCount} vÃ­deos armazenados, ${failedCount} falharam`);
     
-    // Atualizar status do cache no banco
-    if (cachedCount > 0) {
-      await atualizarStatusCache(codigoAtual, true);
-    }
+    // NÃO atualizar status do cache aqui - deixar verificarEAtualizarStatusCache() fazer isso
+    // Isso garante que o status só seja marcado como "pronto" quando TODOS os vídeos estiverem em cache
+    // A função verificarEAtualizarStatusCache() será chamada automaticamente pela verificação periódica
     
     return { cachedCount, failedCount };
   },

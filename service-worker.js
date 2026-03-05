@@ -635,31 +635,51 @@ async function updateCacheForCurrentNS(playlist) {
         
         // Usar timeout muito maior para internet lenta (120s = 2 minutos)
         // Isso evita que trave quando a internet está lenta
-        try {
-          const headResp = await netFetch(url, { method: "GET", cache: "no-store" }, 120000);
-          if (!headResp.ok) {
-            dlog("falha ao baixar vídeo:", url, "status:", headResp.status);
-            continue;
+        // Adicionar retry automático para casos de queda de internet
+        let retryCount = 0;
+        const maxRetries = 3;
+        let success = false;
+        
+        while (!success && retryCount <= maxRetries) {
+          try {
+            if (retryCount > 0) {
+              dlog(`tentativa ${retryCount + 1} de ${maxRetries + 1} para baixar vídeo:`, url);
+              // Aguardar progressivamente mais tempo entre tentativas (2s, 4s, 6s)
+              await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+            }
+            
+            const headResp = await netFetch(url, { method: "GET", cache: "no-store" }, 120000);
+            if (!headResp.ok) {
+              dlog("falha ao baixar vídeo:", url, "status:", headResp.status);
+              retryCount++;
+              continue;
+            }
+            
+            const blob = await headResp.blob();
+            if (!blob || blob.size === 0) {
+              dlog("blob vazio ou inválido:", url);
+              retryCount++;
+              continue;
+            }
+            
+            if (blob.size > MAX_VIDEO_BYTES) {
+              dlog("pulado (arquivo grande)", url, blob.size, "limite:", MAX_VIDEO_BYTES);
+              break; // Não retry para arquivos grandes
+            }
+            
+            dlog("vídeo em cache:", url, "tamanho:", blob.size, "MB:", (blob.size / 1024 / 1024).toFixed(2));
+            await idbSet(nsKey(url), blob);
+            cachedCount++;
+            success = true;
+          } catch (err) {
+            retryCount++;
+            if (retryCount > maxRetries) {
+              // Não travar se falhar após todas as tentativas - apenas logar e continuar
+              dlog("erro ao baixar vídeo após", maxRetries + 1, "tentativas (continuando):", url, err?.message);
+            } else {
+              dlog("erro ao baixar vídeo (tentativa", retryCount, "de", maxRetries + 1, "):", url, err?.message);
+            }
           }
-          
-          const blob = await headResp.blob();
-          if (!blob || blob.size === 0) {
-            dlog("blob vazio ou inválido:", url);
-            continue;
-          }
-          
-          if (blob.size > MAX_VIDEO_BYTES) {
-            dlog("pulado (arquivo grande)", url, blob.size, "limite:", MAX_VIDEO_BYTES);
-            continue;
-          }
-          
-          dlog("vídeo em cache:", url, "tamanho:", blob.size, "MB:", (blob.size / 1024 / 1024).toFixed(2));
-          await idbSet(nsKey(url), blob);
-          cachedCount++;
-        } catch (err) {
-          // Não travar se falhar - apenas logar e continuar
-          dlog("erro ao baixar vídeo (continuando):", url, err?.message);
-          // Continuar para próximo item sem bloquear
         }
       }
     } catch (err) {
