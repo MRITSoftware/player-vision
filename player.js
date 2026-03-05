@@ -239,6 +239,8 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
   if (!plugin) return false;
   try {
     await ensureNativeExoListener();
+    const errEntry = getItemFailureEntry(itemUrl);
+    const useCache = !(errEntry && errEntry.lastReason === "native_exo_error" && errEntry.failures >= 1);
     const fit = item?.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
@@ -246,9 +248,10 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
       url: itemUrl,
       fit,
       muted: true,
+      useCache,
       token: String(token),
     }), 2000);
-    console.log("[native-exo] play requested:", itemUrl);
+    console.log("[native-exo] play requested:", itemUrl, "useCache=", useCache);
     for (const v of getUniqueVideoEls()) {
       v.style.display = "none";
     }

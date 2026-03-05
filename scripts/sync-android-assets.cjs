@@ -138,6 +138,7 @@ public class MritExoPlayerPlugin extends Plugin {
     private boolean initialized = false;
     private SimpleCache simpleCache;
     private CacheDataSource.Factory cacheDataSourceFactory;
+    private DefaultDataSource.Factory upstreamFactory;
     private ExecutorService preloadExecutor;
     private Future<?> preloadFuture;
     private static final long CACHE_MAX_BYTES = 700L * 1024L * 1024L;
@@ -177,6 +178,7 @@ public class MritExoPlayerPlugin extends Plugin {
                     new StandaloneDatabaseProvider(getActivity())
             );
             DefaultDataSource.Factory upstreamFactory = new DefaultDataSource.Factory(getActivity());
+            this.upstreamFactory = upstreamFactory;
             cacheDataSourceFactory = new CacheDataSource.Factory()
                     .setCache(simpleCache)
                     .setUpstreamDataSourceFactory(upstreamFactory)
@@ -196,6 +198,7 @@ public class MritExoPlayerPlugin extends Plugin {
         playerView.setPlayer(player);
         playerView.setKeepScreenOn(true);
         playerView.setKeepContentOnPlayerReset(true);
+        playerView.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT);
         playerView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -216,8 +219,14 @@ public class MritExoPlayerPlugin extends Plugin {
         initialized = true;
     }
 
-    private MediaSource buildMediaSource(String url) {
+    private MediaSource buildMediaSource(String url, boolean useCache) {
         MediaItem mediaItem = MediaItem.fromUri(Uri.parse(url));
+        if (!useCache || cacheDataSourceFactory == null) {
+            if (url != null && url.toLowerCase().contains(".m3u8")) {
+                return new HlsMediaSource.Factory(upstreamFactory).createMediaSource(mediaItem);
+            }
+            return new ProgressiveMediaSource.Factory(upstreamFactory).createMediaSource(mediaItem);
+        }
         if (url != null && url.toLowerCase().contains(".m3u8")) {
             return new HlsMediaSource.Factory(cacheDataSourceFactory).createMediaSource(mediaItem);
         }
@@ -279,6 +288,7 @@ public class MritExoPlayerPlugin extends Plugin {
         String fit = call.getString("fit", "cover");
         Boolean muted = call.getBoolean("muted", true);
         String token = call.getString("token", "");
+        Boolean useCache = call.getBoolean("useCache", true);
 
         if (url == null || url.trim().isEmpty()) {
             call.reject("url is required");
@@ -293,7 +303,7 @@ public class MritExoPlayerPlugin extends Plugin {
                 setResizeMode(fit);
                 showVideoLayer();
                 Glide.with(getActivity()).clear(imageView);
-                player.setMediaSource(buildMediaSource(url), true);
+                player.setMediaSource(buildMediaSource(url, useCache == null || useCache), true);
                 player.prepare();
                 player.setVolume((muted != null && muted) ? 0f : 1f);
                 player.play();
