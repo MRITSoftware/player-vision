@@ -470,11 +470,21 @@ public class MritExoPlayerPlugin extends Plugin {
                     player.pause();
                     player.clearMediaItems();
                 }
+                
+                // Limpar imagem anterior antes de carregar nova (evita frame anterior)
+                if (imageView != null) {
+                    imageView.setImageDrawable(null);
+                    Glide.with(getActivity()).clear(imageView);
+                }
+                
                 showImageLayer();
 
+                // TV boxes podem precisar de mais tempo
+                int timeout = isTvBox() ? 20000 : 15000;
+                
                 Glide.with(getActivity())
                         .load(url)
-                        .timeout(15000)
+                        .timeout(timeout)
                         .into(new CustomTarget<Drawable>() {
                             @Override
                             public void onResourceReady(@NonNull Drawable resource, @Nullable Transition<? super Drawable> transition) {

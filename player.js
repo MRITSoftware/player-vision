@@ -24,8 +24,9 @@ const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
 const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
 const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
-const ENABLE_NATIVE_EXO_DEFAULT = true;
-const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = true;
+// ExoPlayer nativo desativado globalmente: todo playback usa apenas player HTML + Service Worker.
+const ENABLE_NATIVE_EXO_DEFAULT = false;
+const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = false;
 
 let playlist = [];
 let currentIndex = 0;
@@ -149,12 +150,13 @@ function isNativeAndroid() {
 }
 
 function isNativeExoEnabled() {
+  // ExoPlayer nativo foi desativado neste projeto.
+  // Mantemos a função por compatibilidade, mas ela sempre retorna false.
   try {
-    const raw = localStorage.getItem("mrit_use_native_exo");
-    if (raw === "1" || raw === "true") return true;
-    if (raw === "0" || raw === "false") return false;
+    // Garantir que qualquer configuração antiga seja ignorada.
+    localStorage.removeItem("mrit_use_native_exo");
   } catch {}
-  return ENABLE_NATIVE_EXO_DEFAULT && isNativeAndroid();
+  return false;
 }
 
 function getNativeExoPlugin() {
@@ -272,6 +274,19 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
   }
 }
 
+// Helper para detectar TV box (mesma lógica do Java)
+function isTvBox() {
+  try {
+    // Verificar se é TV box através de características do dispositivo
+    const ua = navigator.userAgent.toLowerCase();
+    const isAndroidTV = ua.includes('android') && (ua.includes('tv') || ua.includes('settopbox'));
+    const isLeanback = 'getInstalledRelatedApps' in navigator;
+    return isAndroidTV || isLeanback;
+  } catch {
+    return false;
+  }
+}
+
 async function tryShowImageNative(item, itemUrl, token) {
   if (!isNativeAndroid() || !isNativeExoEnabled()) return false;
   const plugin = getNativeExoPlugin();
@@ -281,11 +296,15 @@ async function tryShowImageNative(item, itemUrl, token) {
     const fit = item?.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
+    
+    // TV boxes podem precisar de mais tempo para carregar imagens
+    const timeout = isTvBox() ? 8000 : 5000;
+    
     await nativeCallWithTimeout(plugin.showImage({
       url: itemUrl,
       fit,
       token: String(token),
-    }), 2500);
+    }), timeout);
     clearItemFailure(itemUrl);
     isPlaying = true;
     return true;
@@ -406,8 +425,14 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     preloadEl.playsInline = true;
     preloadEl.src = nextUrl;
     preloadEl.load();
-    const ok = await waitForCanPlay(preloadEl, 1500);
-    if (ok) preloadedBufferUrl = nextUrl;
+    // Com cache carregado, pré-carregamento é muito mais rápido (vem do IndexedDB)
+    // Reduzir timeout para pré-carregamento após primeiro ciclo
+    const preloadTimeout = 2000; // 2s é suficiente quando vem do cache
+    const ok = await waitForCanPlay(preloadEl, preloadTimeout);
+    if (ok) {
+      preloadedBufferUrl = nextUrl;
+      console.log("[preload] Próximo vídeo pré-carregado:", nextUrl);
+    }
   } catch {
     // best effort
   } finally {
@@ -2459,6 +2484,8 @@ async function tocarLoop() {
 
       if (!isHls && preloadedBufferUrl === itemUrl && nextVideo.readyState >= 2) {
         // Buffer já aquecido: troca praticamente instantânea.
+        // Pular waitForVideoReady porque já está pronto
+        console.log("[playback] Vídeo pré-carregado detectado, troca instantânea");
       } else if (isHls) {
         destroyHls();
         if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
@@ -2499,7 +2526,10 @@ async function tocarLoop() {
       } else {
         nextVideo.src = itemUrl;
         nextVideo.load();
-        const ok = await waitForVideoReady(nextVideo, 6000);
+        // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB
+        // Reduzir timeout quando não é primeiro ciclo (cache já está pronto)
+        const timeout = isFirstCycle ? 6000 : 3000;
+        const ok = await waitForVideoReady(nextVideo, timeout);
         if (!ok || nextVideo.readyState < 3) throw new Error("video nao pronto");
       }
 
@@ -2677,11 +2707,9 @@ async function tocarLoop() {
       }, imageDuration);
       return;
     }
-    console.warn("[native-media] strict mode active; skipping web image fallback for:", itemUrl);
-    registerItemFailure(itemUrl, "native_image_required");
-    isPlaying = false;
-    proximoItem();
-    return;
+    // Fallback para HTML quando modo nativo falha (especialmente em TV boxes)
+    console.warn("[native-media] native image failed, using HTML fallback for:", itemUrl);
+    // Continuar para usar img.onload abaixo (não pular o item)
   }
 
   img.onload = () => {
@@ -2705,6 +2733,12 @@ async function tocarLoop() {
     preloadingBuffer = false;
     stopPlaybackWatchdog();
 
+    // Limpar imagem anterior antes de mostrar nova (evita frame anterior)
+    img.style.display = "none";
+    img.style.opacity = "0";
+    // Forçar repaint antes de mostrar nova imagem
+    void img.offsetHeight;
+    
     img.style.display = "block";
     img.classList.remove("hidden-ready");
     img.style.opacity = "1";
@@ -2730,7 +2764,19 @@ async function tocarLoop() {
     proximoItem();
   };
 
-  img.src = itemUrl;
+  // Limpar imagem anterior antes de carregar nova (evita frame anterior)
+  img.style.display = "none";
+  img.style.opacity = "0";
+  img.src = "";
+  // Forçar limpeza do cache do navegador
+  if (img.complete) {
+    img.onload = null;
+    img.onerror = null;
+  }
+  // Pequeno delay para garantir limpeza antes de carregar nova (usar setTimeout para não bloquear)
+  setTimeout(() => {
+    img.src = itemUrl;
+  }, 10);
 }
 
 
