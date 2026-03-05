@@ -42,13 +42,18 @@ jobs:
     - name: Instalar Capacitor CLI
       run: npm install -g @capacitor/cli
       
-    - name: Adicionar plataforma Android (se não existir)
+    - name: Adicionar plataforma Android (se necessário)
       run: |
-        if [ ! -d "android" ]; then
-          echo "📦 Pasta android não existe, rodando 'npx cap add android'..."
+        # Se a pasta android não existir OU se não tiver gradlew, recriar o projeto
+        if [ ! -d "android" ] || [ ! -f "android/gradlew" ]; then
+          if [ -d "android" ]; then
+            echo "⚠️ Pasta android existe mas sem gradlew. Removendo para recriar..."
+            rm -rf android
+          fi
+          echo "📦 Criando projeto Android com 'npx cap add android'..."
           npx cap add android
         else
-          echo "✅ Pasta android já existe, pulando 'npx cap add android'."
+          echo "✅ Pasta android já existe com gradlew."
         fi
       
     - name: Sincronizar Capacitor
@@ -67,9 +72,15 @@ jobs:
       run: |
         if [ -f "android/gradlew" ]; then
           chmod +x android/gradlew
+          echo "✅ Permissões do gradlew configuradas"
         else
-          echo "⚠️ android/gradlew não encontrado. Listando estrutura da pasta android:"
-          ls -R
+          echo "❌ ERRO: android/gradlew não encontrado após sincronização"
+          echo "📁 Estrutura da pasta android:"
+          ls -la android/ || true
+          if [ -d "android" ]; then
+            echo "📁 Conteúdo de android/:"
+            find android -maxdepth 2 -type f -name "*.gradle" -o -name "gradlew*" 2>/dev/null || true
+          fi
           exit 1
         fi
       
