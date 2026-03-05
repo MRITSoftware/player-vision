@@ -318,6 +318,14 @@ async function tryShowImageNative(item, itemUrl, token) {
 
 function startPlaybackWatchdog(videoEl, token, itemUrl) {
   stopPlaybackWatchdog();
+
+  // Em sticks/TV boxes o hardware é mais fraco e pode reportar progresso de forma irregular.
+  // Para evitar cortes prematuros (como vídeos curtos terminando antes da hora),
+  // desativamos o watchdog nesses dispositivos.
+  try {
+    if (typeof isTvBox === "function" && isTvBox()) return;
+  } catch {}
+
   let lastTime = -1;
   let lastProgressAt = Date.now();
 

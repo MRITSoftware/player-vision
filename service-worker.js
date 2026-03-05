@@ -454,7 +454,19 @@ async function updateCacheForCurrentNS(playlist) {
 
   // 1) Limpa vídeos do IDB que não pertencem a este playlist (dentro do NS)
   const keys = await idbAllKeys();
-  const keepUrls = new Set(playlist.map(i => i.url));
+
+  // Considerar todas as variantes de URL (normal, portrait, landscape)
+  const keepUrls = new Set();
+  for (const item of playlist) {
+    if (!item) continue;
+    const base = (item.url || "").trim();
+    const portrait = (item.urlPortrait || "").trim();
+    const landscape = (item.urlLandscape || "").trim();
+    if (base) keepUrls.add(base);
+    if (portrait) keepUrls.add(portrait);
+    if (landscape) keepUrls.add(landscape);
+  }
+
   const prefix = `${CURRENT_NS}::`;
   await Promise.all(keys.map(k => {
     const ks = String(k);
@@ -479,7 +491,20 @@ async function updateCacheForCurrentNS(playlist) {
   let cachedCount = 0;
 
   for (const item of playlist) {
-    const url = item.url;
+    if (!item) continue;
+
+    // Para garantir suporte a URLs diferentes por orientação, precache todas as variantes.
+    const urlsToCache = [];
+    const base = (item.url || "").trim();
+    const portrait = (item.urlPortrait || "").trim();
+    const landscape = (item.urlLandscape || "").trim();
+    if (base) urlsToCache.push(base);
+    if (portrait) urlsToCache.push(portrait);
+    if (landscape) urlsToCache.push(landscape);
+
+    for (const url of urlsToCache) {
+      if (!url) continue;
+
     const u = new URL(url);
     const isStorage = isSupabaseStorageURL(u);
 
