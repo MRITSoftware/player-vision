@@ -57,6 +57,7 @@ let lastFailedRetries = 0;
 let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
+let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
 const itemFailureState = new Map();
 let nativeExoListenerHandle = null;
 let nativeExoPendingToken = null;
@@ -239,8 +240,10 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
   if (!plugin) return false;
   try {
     await ensureNativeExoListener();
-    const errEntry = getItemFailureEntry(itemUrl);
-    const useCache = !(errEntry && errEntry.lastReason === "native_exo_error" && errEntry.failures >= 1);
+    // Primeiro ciclo: sempre usar internet direta (sem cache)
+    // Após primeiro ciclo: permitir cache para melhor performance
+    // TV boxes: sempre sem cache (já tratado no plugin nativo)
+    const useCache = !isFirstCycle;
     const fit = item?.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
@@ -251,7 +254,7 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
       useCache,
       token: String(token),
     }), 2000);
-    console.log("[native-exo] play requested:", itemUrl, "useCache=", useCache);
+    console.log("[native-exo] play requested:", itemUrl, "useCache=", useCache, "isFirstCycle=", isFirstCycle);
     for (const v of getUniqueVideoEls()) {
       v.style.display = "none";
     }
@@ -343,6 +346,9 @@ async function nativePreloadUpcomingItem(baseIndex) {
   if (!isNativeMediaModeActive()) return;
   const plugin = getNativeExoPlugin();
   if (!plugin || !Array.isArray(playlist) || playlist.length < 2) return;
+  
+  // Primeiro ciclo: não pré-carregar (usar internet direta)
+  if (isFirstCycle) return;
 
   try {
     const nextIndex = (baseIndex + 1) % playlist.length;
@@ -352,11 +358,21 @@ async function nativePreloadUpcomingItem(baseIndex) {
     if (!nextUrl || isItemOnCooldown(nextUrl)) return;
 
     const tipo = isImageItem(nextItem, nextUrl) ? "imagem" : "video";
-    await nativeCallWithTimeout(plugin.preload({
-      url: nextUrl,
-      tipo,
-      token: String(playToken || 0),
-    }), 1000);
+    // Após primeiro ciclo: permitir pré-carregamento de vídeos também
+    if (tipo === "video") {
+      // Pré-carregar vídeo apenas após primeiro ciclo
+      await nativeCallWithTimeout(plugin.preload({
+        url: nextUrl,
+        tipo,
+        token: String(playToken || 0),
+      }), 1000);
+    } else {
+      await nativeCallWithTimeout(plugin.preload({
+        url: nextUrl,
+        tipo,
+        token: String(playToken || 0),
+      }), 1000);
+    }
   } catch {
     // best effort
   }
@@ -364,6 +380,9 @@ async function nativePreloadUpcomingItem(baseIndex) {
 
 async function preloadUpcomingVideoInBuffer(baseIndex) {
   try {
+    // Primeiro ciclo: não pré-carregar (usar internet direta)
+    if (isFirstCycle) return;
+    
     if (preloadingBuffer || !playlist.length) return;
     const preloadEl = (videoBuffer && videoBuffer !== video) ? videoBuffer : null;
     if (!preloadEl) return;
@@ -1943,6 +1962,9 @@ async function iniciar() {
 
 async function carregarConteudo(codigoConteudo) {
   try {
+    // Resetar flag de primeiro ciclo ao carregar novo conteúdo
+    isFirstCycle = true;
+    
     const wasPlaying = !video.paused && video.style.display === "block";
     const currentTime = video.currentTime;
     const wasVideo = video.style.display === "block";
@@ -2338,6 +2360,9 @@ async function resetAllCachesForNewCode() {
     v.load();
   }
   preloadedBufferUrl = null;
+  
+  // Resetar flag de primeiro ciclo quando novo código é carregado
+  isFirstCycle = true;
   preloadingBuffer = false;
   await stopNativeVideoPlayback();
   stopPlaybackWatchdog();
@@ -3096,6 +3121,12 @@ function proximoItem() {
   const indexAnterior = currentIndex;
   currentIndex = (currentIndex + 1) % playlist.length;
   const cicloCompleto = indexAnterior === playlist.length - 1 && currentIndex === 0;
+
+  // Marcar fim do primeiro ciclo para habilitar cache e pré-carregamento
+  if (cicloCompleto && isFirstCycle) {
+    isFirstCycle = false;
+    console.log("✅ Primeiro ciclo completo! Cache e pré-carregamento habilitados.");
+  }
 
   // Mantem playlist atualizada durante a rotacao (novo item/reordem/remocao)
   if (navigator.onLine && currentPlaylistId) {

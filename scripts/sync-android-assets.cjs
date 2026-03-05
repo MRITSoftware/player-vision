@@ -86,12 +86,14 @@ function syncNativeExoPlayer() {
 
   const pluginJava = `package com.mritsoftware.player;
 
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.view.TextureView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -131,6 +133,7 @@ import java.util.concurrent.Future;
 public class MritExoPlayerPlugin extends Plugin {
     private ExoPlayer player;
     private PlayerView playerView;
+    private TextureView textureView;
     private ImageView imageView;
     private FrameLayout overlay;
     private String currentToken = "";
@@ -143,6 +146,16 @@ public class MritExoPlayerPlugin extends Plugin {
     private Future<?> preloadFuture;
     private static final long CACHE_MAX_BYTES = 700L * 1024L * 1024L;
     private static final long PRELOAD_VIDEO_BYTES = 8L * 1024L * 1024L;
+
+    private boolean isTvBox() {
+        try {
+            PackageManager pm = getActivity().getPackageManager();
+            return pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK) || 
+                   pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION);
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     private final Player.Listener playerListener = new Player.Listener() {
         @Override
@@ -166,7 +179,13 @@ public class MritExoPlayerPlugin extends Plugin {
 
     private void ensureInitialized() {
         if (initialized) return;
-        player = new ExoPlayer.Builder(getActivity()).build();
+        // TV Box fix: configurar ExoPlayer com opções específicas para TV boxes
+        ExoPlayer.Builder builder = new ExoPlayer.Builder(getActivity());
+        if (isTvBox()) {
+            // Para TV boxes, desabilitar algumas otimizações que podem causar problemas
+            // O builder já usa configurações padrão compatíveis
+        }
+        player = builder.build();
         player.addListener(playerListener);
         if (preloadExecutor == null) preloadExecutor = Executors.newSingleThreadExecutor();
         if (cacheDataSourceFactory == null) {
@@ -204,6 +223,18 @@ public class MritExoPlayerPlugin extends Plugin {
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
         playerView.setVisibility(View.GONE);
+        
+        // TV Box fix: criar TextureView separado para TV boxes (mais compatível que SurfaceView)
+        if (isTvBox()) {
+            textureView = new TextureView(getActivity());
+            textureView.setLayoutParams(new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+            ));
+            textureView.setVisibility(View.GONE);
+            // Conectar TextureView ao player
+            player.setVideoTextureView(textureView);
+        }
 
         overlay = new FrameLayout(getActivity());
         overlay.setLayoutParams(new FrameLayout.LayoutParams(
@@ -213,6 +244,10 @@ public class MritExoPlayerPlugin extends Plugin {
         overlay.setVisibility(View.GONE);
         overlay.addView(imageView);
         overlay.addView(playerView);
+        // TV Box fix: adicionar TextureView ao overlay se estiver usando
+        if (isTvBox() && textureView != null) {
+            overlay.addView(textureView);
+        }
 
         ViewGroup root = getActivity().findViewById(android.R.id.content);
         root.addView(overlay);
@@ -258,6 +293,10 @@ public class MritExoPlayerPlugin extends Plugin {
         overlay.setVisibility(View.VISIBLE);
         imageView.setVisibility(View.GONE);
         playerView.setVisibility(View.VISIBLE);
+        // TV Box fix: mostrar TextureView se estiver usando
+        if (isTvBox() && textureView != null) {
+            textureView.setVisibility(View.VISIBLE);
+        }
     }
 
     private void showImageLayer() {
@@ -303,10 +342,44 @@ public class MritExoPlayerPlugin extends Plugin {
                 setResizeMode(fit);
                 showVideoLayer();
                 Glide.with(getActivity()).clear(imageView);
-                player.setMediaSource(buildMediaSource(url, useCache == null || useCache), true);
+                
+                // TV Box fix: garantir que a view está visível antes de preparar o player
+                if (playerView != null && playerView.getVisibility() != View.VISIBLE) {
+                    playerView.setVisibility(View.VISIBLE);
+                }
+                if (overlay != null && overlay.getVisibility() != View.VISIBLE) {
+                    overlay.setVisibility(View.VISIBLE);
+                }
+                if (isTvBox() && textureView != null && textureView.getVisibility() != View.VISIBLE) {
+                    textureView.setVisibility(View.VISIBLE);
+                }
+                
+                // TV Box fix: para TV boxes, sempre usar stream direto (sem cache)
+                boolean shouldUseCache = (useCache != null && useCache) && !isTvBox();
+                
+                player.setMediaSource(buildMediaSource(url, shouldUseCache), true);
                 player.prepare();
                 player.setVolume((muted != null && muted) ? 0f : 1f);
-                player.play();
+                
+                // TV Box fix: pequeno delay antes de play para garantir que a view está pronta
+                if (isTvBox()) {
+                    View targetView = textureView != null ? textureView : playerView;
+                    if (targetView != null) {
+                        targetView.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                if (player != null) {
+                                    player.play();
+                                }
+                            }
+                        }, 150);
+                    } else {
+                        player.play();
+                    }
+                } else {
+                    player.play();
+                }
+                
                 emitState("play_requested", null);
                 JSObject ret = new JSObject();
                 ret.put("ok", true);
@@ -450,6 +523,10 @@ public class MritExoPlayerPlugin extends Plugin {
                     imageView.setVisibility(View.GONE);
                 }
                 if (playerView != null) playerView.setVisibility(View.GONE);
+                if (isTvBox() && textureView != null) {
+                    textureView.setVisibility(View.GONE);
+                    player.setVideoTextureView(null);
+                }
                 if (overlay != null) overlay.setVisibility(View.GONE);
                 emitState("stopped", null);
                 JSObject ret = new JSObject();
@@ -491,6 +568,12 @@ public class MritExoPlayerPlugin extends Plugin {
         if (imageView != null) {
             try { Glide.with(getActivity()).clear(imageView); } catch (Exception ignored) {}
             imageView = null;
+        }
+        if (isTvBox() && textureView != null) {
+            try {
+                if (player != null) player.setVideoTextureView(null);
+            } catch (Exception ignored) {}
+            textureView = null;
         }
         if (overlay != null) overlay.setVisibility(View.GONE);
         initialized = false;
