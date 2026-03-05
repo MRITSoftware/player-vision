@@ -240,7 +240,8 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     preloadEl.preload = "auto";
     preloadEl.muted = true;
     preloadEl.playsInline = true;
-    preloadEl.src = nextUrl;
+    const preloadSrc = await resolveOfflineVideoSrc(nextUrl);
+    setVideoElementSource(preloadEl, preloadSrc);
     preloadEl.load();
     // Com cache carregado, pré-carregamento é muito mais rápido (vem do IndexedDB)
     // Reduzir timeout para pré-carregamento após primeiro ciclo
@@ -579,6 +580,80 @@ async function idbAllKeys() {
   });
 }
 
+function getUrlWithoutQuery(url) {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+async function findCachedVideoBlob(url, preferredNamespace = codigoAtual) {
+  if (!url) return null;
+
+  const cleanUrl = getUrlWithoutQuery(url);
+  const candidates = [url];
+  if (cleanUrl && cleanUrl !== url) candidates.push(cleanUrl);
+
+  const namespaces = [];
+  if (preferredNamespace) namespaces.push(String(preferredNamespace));
+  if (!namespaces.includes("global")) namespaces.push("global");
+
+  for (const ns of namespaces) {
+    for (const u of candidates) {
+      const blob = await idbGet(`${ns}::${u}`);
+      if (blob && blob.size > 0) return blob;
+    }
+  }
+
+  // Fallback final: procurar o mesmo URL em qualquer namespace.
+  const keys = await idbAllKeys();
+  for (const rawKey of keys) {
+    const ks = String(rawKey);
+    if (!candidates.some(u => ks.endsWith(`::${u}`))) continue;
+    const blob = await idbGet(ks);
+    if (blob && blob.size > 0) return blob;
+  }
+
+  return null;
+}
+
+async function resolveOfflineVideoSrc(url) {
+  if (!url || navigator.onLine || /\.m3u8(\?|$)/i.test(url)) return url;
+  try {
+    const blob = await findCachedVideoBlob(url, codigoAtual);
+    if (blob) {
+      return URL.createObjectURL(blob);
+    }
+  } catch (err) {
+    console.warn("⚠️ Falha ao resolver vídeo offline no IDB:", err);
+  }
+  return url;
+}
+
+function revokeVideoObjectUrl(videoEl) {
+  if (!videoEl) return;
+  const old = videoEl.__mritObjectUrl;
+  if (old && typeof old === "string") {
+    try { URL.revokeObjectURL(old); } catch {}
+  }
+  videoEl.__mritObjectUrl = null;
+}
+
+function setVideoElementSource(videoEl, src) {
+  if (!videoEl) return;
+  revokeVideoObjectUrl(videoEl);
+  videoEl.src = src;
+  videoEl.__mritObjectUrl = (typeof src === "string" && src.startsWith("blob:")) ? src : null;
+}
+
+function clearVideoElementSource(videoEl) {
+  if (!videoEl) return;
+  revokeVideoObjectUrl(videoEl);
+  videoEl.removeAttribute("src");
+}
+
 // ===== Cache helpers (namespaced por cÃ³digo) =====
 function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
@@ -645,8 +720,7 @@ async function verificarEAtualizarStatusCache() {
       
       if (isVideo) {
         totalVideos++;
-        const cacheKey = `${codigoAtual}::${url}`;
-        const cachedBlob = await idbGet(cacheKey);
+        const cachedBlob = await findCachedVideoBlob(url, codigoAtual);
         
         if (cachedBlob && cachedBlob.size > 0) {
           videosEmCache++;
@@ -2239,7 +2313,7 @@ async function resetAllCachesForNewCode() {
   // zera os elementos de mÃ­dia (ativo + buffer)
   for (const v of getUniqueVideoEls()) {
     try { v.pause(); } catch {}
-    v.removeAttribute("src");
+    clearVideoElementSource(v);
     v.load();
   }
   preloadedBufferUrl = null;
@@ -2330,7 +2404,7 @@ async function tocarLoop() {
       } else if (isHls) {
         destroyHls();
         if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
-          nextVideo.src = itemUrl;
+          setVideoElementSource(nextVideo, itemUrl);
           nextVideo.load();
           const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls nativo nao pronto");
@@ -2359,13 +2433,14 @@ async function tocarLoop() {
             });
           });
         } else {
-          nextVideo.src = itemUrl;
+          setVideoElementSource(nextVideo, itemUrl);
           nextVideo.load();
           const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
-        nextVideo.src = itemUrl;
+        const resolvedSrc = await resolveOfflineVideoSrc(itemUrl);
+        setVideoElementSource(nextVideo, resolvedSrc);
         nextVideo.load();
         // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB
         // Reduzir timeout quando não é primeiro ciclo (cache já está pronto)
@@ -2430,7 +2505,7 @@ async function tocarLoop() {
           previousVideo.classList.remove("hidden-ready");
           try {
             previousVideo.pause();
-            previousVideo.removeAttribute("src");
+            clearVideoElementSource(previousVideo);
             previousVideo.load();
           } catch {}
         }
@@ -2556,7 +2631,7 @@ async function tocarLoop() {
       try {
         v.pause();
         v.currentTime = 0;
-        v.removeAttribute("src");
+        clearVideoElementSource(v);
         v.load();
       } catch {}
       v.style.display = "none";
@@ -3452,7 +3527,7 @@ async function pararTudoMostrarLogin() {
     try {
       v.pause();
       v.currentTime = 0;
-      v.removeAttribute("src");
+      clearVideoElementSource(v);
       v.load();
     } catch {}
     v.style.display = "none";
