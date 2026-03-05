@@ -55,6 +55,7 @@ let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
+let cacheFullyReady = false; // true apenas quando 100% dos itens da playlist estão em cache
 const itemFailureState = new Map();
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
@@ -166,9 +167,10 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
 
   // Em sticks/TV boxes o hardware é mais fraco e pode reportar progresso de forma irregular.
   // Para evitar cortes prematuros (como vídeos curtos terminando antes da hora),
-  // desativamos o watchdog nesses dispositivos.
+  // desativamos o watchdog nesses dispositivos enquanto há internet.
+  // Se ficar offline, reativamos o watchdog para evitar travamento no item atual.
   try {
-    if (typeof isTvBox === "function" && isTvBox()) return;
+    if (typeof isTvBox === "function" && isTvBox() && navigator.onLine) return;
   } catch {}
 
   let lastTime = -1;
@@ -240,7 +242,7 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     preloadEl.preload = "auto";
     preloadEl.muted = true;
     preloadEl.playsInline = true;
-    const preloadSrc = await resolveOfflineVideoSrc(nextUrl);
+    const preloadSrc = await resolveVideoSrcForPlayback(nextUrl, { preferCache: true, cacheOnly: false });
     setVideoElementSource(preloadEl, preloadSrc);
     preloadEl.load();
     // Com cache carregado, pré-carregamento é muito mais rápido (vem do IndexedDB)
@@ -619,16 +621,23 @@ async function findCachedVideoBlob(url, preferredNamespace = codigoAtual) {
   return null;
 }
 
-async function resolveOfflineVideoSrc(url) {
-  if (!url || navigator.onLine || /\.m3u8(\?|$)/i.test(url)) return url;
+async function resolveVideoSrcForPlayback(url, opts = {}) {
+  const { preferCache = false, cacheOnly = false } = opts;
+  if (!url || /\.m3u8(\?|$)/i.test(url)) return url;
+
+  const shouldPreferCache = !navigator.onLine || preferCache || cacheFullyReady;
+  if (!shouldPreferCache) return url;
+
   try {
     const blob = await findCachedVideoBlob(url, codigoAtual);
     if (blob) {
       return URL.createObjectURL(blob);
     }
   } catch (err) {
-    console.warn("⚠️ Falha ao resolver vídeo offline no IDB:", err);
+    console.warn("⚠️ Falha ao resolver vídeo no IDB:", err);
   }
+
+  if (cacheOnly) return null;
   return url;
 }
 
@@ -760,6 +769,7 @@ async function verificarEAtualizarStatusCache() {
     const cacheProntoVideos = (totalVideos === 0) || (videosEmCache === totalVideos);
     const cacheProntoImagens = (totalImagens === 0) || (imagensEmCache === totalImagens);
     const cachePronto = cacheProntoVideos && cacheProntoImagens;
+    cacheFullyReady = cachePronto;
     
     console.log(`ðŸ“Š Cache de VÃ­deos: ${videosEmCache}/${totalVideos} (${percentualVideos.toFixed(1)}%)`);
     console.log(`ðŸ“Š Cache de Imagens: ${imagensEmCache}/${totalImagens} (${percentualImagens.toFixed(1)}%)`);
@@ -788,6 +798,7 @@ async function verificarEAtualizarStatusCache() {
     return cachePronto;
   } catch (error) {
     console.error("âŒ Erro ao verificar cache:", error);
+    cacheFullyReady = false;
     await atualizarStatusCache(codigoAtual, false);
     return false;
   }
@@ -2168,6 +2179,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   // Se a playlist mudou, o Service Worker vai limpar apenas o que nÃ£o estÃ¡ na nova playlist
   // MantÃ©m automaticamente os vÃ­deos/imagens que estÃ£o na nova playlist (cache inteligente)
   if (playlistMudou && codigoAtual) {
+    cacheFullyReady = false;
     console.log("ðŸ”„ Playlist mudou, atualizando cache...");
     console.log(`ðŸ“Š Antes: ${playlistAntiga.length} itens | Depois: ${playlistNova.length} itens`);
     console.log("ðŸ’¡ Service Worker vai manter cache dos itens que estÃ£o na nova playlist");
@@ -2180,6 +2192,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   await salvarCache(playlist, (playlistId ?? codigoAtual));
 
   if (!playlist.length) {
+    cacheFullyReady = false;
     await stopNativeVideoPlayback();
     try { video.pause(); } catch {}
     destroyHls();
@@ -2302,6 +2315,7 @@ async function salvarCache(playlistData, codigo) {
 
 // Reset agressivo quando entra com um novo cÃ³digo
 async function resetAllCachesForNewCode() {
+  cacheFullyReady = false;
   // limpa caches antigos de playlists (todas as telas)
   Object.keys(localStorage).forEach(k => {
     if (k.startsWith("playlist_cache_")) localStorage.removeItem(k);
@@ -2439,7 +2453,13 @@ async function tocarLoop() {
           if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
-        const resolvedSrc = await resolveOfflineVideoSrc(itemUrl);
+        const resolvedSrc = await resolveVideoSrcForPlayback(itemUrl, {
+          preferCache: true,
+          cacheOnly: cacheFullyReady && navigator.onLine
+        });
+        if (!resolvedSrc) {
+          throw new Error("cache_only_miss");
+        }
         setVideoElementSource(nextVideo, resolvedSrc);
         nextVideo.load();
         // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB
@@ -2694,6 +2714,12 @@ let lastNetworkCheck = 0;
 const NETWORK_CHECK_INTERVAL = 30000; // Verificar a cada 30s
 
 async function detectNetworkSpeed() {
+  if (!navigator.onLine) {
+    networkSpeed = "slow";
+    lastNetworkCheck = Date.now();
+    return "slow";
+  }
+
   const now = Date.now();
   if (now - lastNetworkCheck < NETWORK_CHECK_INTERVAL) {
     return networkSpeed; // Usar cache
@@ -2749,11 +2775,14 @@ function waitForCanPlay(videoEl, timeoutMs = 7000) {
     if (videoEl.readyState >= 3) return resolve(true);
     
     // Ajustar timeout baseado na velocidade de rede
-    const adaptiveTimeout = await detectNetworkSpeed().then(speed => {
-      if (speed === 'slow') return timeoutMs * 3;
-      if (speed === 'fast') return timeoutMs * 0.7;
-      return timeoutMs;
-    });
+    let adaptiveTimeout = timeoutMs;
+    if (navigator.onLine) {
+      adaptiveTimeout = await detectNetworkSpeed().then(speed => {
+        if (speed === 'slow') return timeoutMs * 3;
+        if (speed === 'fast') return timeoutMs * 0.7;
+        return timeoutMs;
+      });
+    }
     
     let done = false;
     const onCanPlay = () => { if (!done) { done = true; cleanup(); resolve(true); } };
@@ -3521,6 +3550,7 @@ async function verificarMudancaDispositivo() {
 
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
+  cacheFullyReady = false;
   // Parar e esconder vÃ­deos (ativo + buffer)
   await stopNativeVideoPlayback();
   for (const v of getUniqueVideoEls()) {
@@ -4915,16 +4945,10 @@ window.mritDebug = {
     
     let cachedCount = 0;
     let failedCount = 0;
-    const maxVideos = 80; // Alinhado com Service Worker (MAX_VIDEOS_PER_NS)
     const maxSize = 5 * 1024 * 1024 * 1024; // 5GB (alinhado com Service Worker MAX_VIDEO_BYTES)
     const maxRetries = 5;
     
     for (const item of playlist) {
-      if (cachedCount >= maxVideos) {
-        console.log("âš ï¸ Limite de vÃ­deos atingido");
-        break;
-      }
-      
       const url = pickSourceForOrientation(item);
       const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
       
@@ -5164,9 +5188,16 @@ window.mritDebug = {
       console.log("âŒ Nenhum cÃ³digo de tela ativo");
       return;
     }
-    
-    await atualizarStatusCache(codigoAtual, status);
-    console.log(`ðŸ”„ Status do cache forÃ§ado para: ${status ? 'pronto' : 'nÃ£o pronto'}`);
+
+    if (status) {
+      const pronto = await verificarEAtualizarStatusCache();
+      console.log(`ðŸ”„ Status solicitado=pronto; resultado real: ${pronto ? 'pronto' : 'nÃ£o pronto'}`);
+      return;
+    }
+
+    cacheFullyReady = false;
+    await atualizarStatusCache(codigoAtual, false);
+    console.log("ðŸ”„ Status do cache forÃ§ado para: nÃ£o pronto");
   },
   async verificarCacheCompleto() {
     console.log("ðŸ” VerificaÃ§Ã£o completa do cache...");

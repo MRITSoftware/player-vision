@@ -23,7 +23,6 @@ let OFFLINE_TEST = false;
 let CURRENT_NS = "global"; // namespace da tela (ex.: CÓDIGO)
 
 // Limites de cache (simples e efetivos)
-const MAX_VIDEOS_PER_NS = 80;       // até 80 vídeos por tela
 const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por vídeo (aumentado para suportar vídeos maiores)
 
 function dlog(...args) { 
@@ -640,11 +639,6 @@ async function updateCacheForCurrentNS(playlist) {
       }
 
       if (/\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url)) {
-        if (cachedCount >= MAX_VIDEOS_PER_NS) {
-          dlog("limite de vídeos em cache atingido para NS", CURRENT_NS);
-          continue;
-        }
-        
         // Verificar se já existe no cache
         const existingBlob = await idbGet(nsKey(url));
         if (existingBlob) {
