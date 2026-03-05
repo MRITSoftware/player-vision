@@ -3285,9 +3285,8 @@ async function verificarMudancaDispositivo() {
     
     const { data: dispositivo, error } = await client
       .from("dispositivos")
-      .select("codigo_display, local_nome")
+      .select("codigo_display, local_nome, is_ativo")
       .eq("device_id", deviceId)
-      .eq("is_ativo", true)
       .maybeSingle();
     
     if (error) {
@@ -3299,8 +3298,38 @@ async function verificarMudancaDispositivo() {
       return;
     }
     
+    // Se dispositivo não existe, foi desassociado ou está inativo
+    if (!dispositivo || !dispositivo.is_ativo || !dispositivo.codigo_display) {
+      console.log("🛑 Dispositivo desassociado ou inativo, parando exibição...");
+      
+      // Desbloquear display atual
+      if (codigoAtual) {
+        try {
+          await client
+            .from("displays")
+            .update({ is_locked: false, status: "Disponível" })
+            .eq("codigo_unico", codigoAtual);
+        } catch (err) {
+          console.warn("⚠️ Erro ao desbloquear display:", err);
+        }
+      }
+      
+      // Limpar localStorage
+      localStorage.removeItem(CODIGO_DISPLAY_KEY);
+      localStorage.removeItem(LOCAL_TELA_KEY);
+      
+      // Limpar cache do namespace antes de sair
+      if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({ action: "clearNamespace" });
+      }
+      
+      // Parar tudo e mostrar tela de login
+      await pararTudoMostrarLogin();
+      return;
+    }
+    
     if (dispositivo && dispositivo.codigo_display && dispositivo.codigo_display !== codigoAtual) {
-      console.log("ðŸ”„ MudanÃ§a detectada via polling:", codigoAtual, "â†’", dispositivo.codigo_display);
+      console.log("ðŸ"„ MudanÃ§a detectada via polling:", codigoAtual, "â†'", dispositivo.codigo_display);
       
       // Mesma lÃ³gica do realtime
       const novoCodigo = dispositivo.codigo_display;
