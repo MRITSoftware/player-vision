@@ -42,8 +42,14 @@ jobs:
     - name: Instalar Capacitor CLI
       run: npm install -g @capacitor/cli
       
-    - name: Adicionar plataforma Android
-      run: npx cap add android
+    - name: Adicionar plataforma Android (se não existir)
+      run: |
+        if [ ! -d "android" ]; then
+          echo "📦 Pasta android não existe, rodando 'npx cap add android'..."
+          npx cap add android
+        else
+          echo "✅ Pasta android já existe, pulando 'npx cap add android'."
+        fi
       
     - name: Sincronizar Capacitor
       run: npx cap sync android
