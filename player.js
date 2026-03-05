@@ -3329,7 +3329,7 @@ async function verificarMudancaDispositivo() {
     }
     
     if (dispositivo && dispositivo.codigo_display && dispositivo.codigo_display !== codigoAtual) {
-      console.log("ðŸ"„ MudanÃ§a detectada via polling:", codigoAtual, "â†'", dispositivo.codigo_display);
+      console.log("Mudança detectada via polling:", codigoAtual, "->", dispositivo.codigo_display);
       
       // Mesma lÃ³gica do realtime
       const novoCodigo = dispositivo.codigo_display;
