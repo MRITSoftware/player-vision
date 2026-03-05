@@ -13,18 +13,17 @@ import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     private Handler handler = new Handler(Looper.getMainLooper());
-    
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        registerPlugin(MritExoPlayerPlugin.class);
         super.onCreate(savedInstanceState);
-        
+
         // Manter tela ligada
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        
+
         // Esconder barra de status e navegação imediatamente
         entrarFullscreenImersivo();
-        
+
         // Reaplicar fullscreen quando a janela ganha foco
         getWindow().getDecorView().setOnSystemUiVisibilityChangeListener(
             new View.OnSystemUiVisibilityChangeListener() {
@@ -43,14 +42,14 @@ public class MainActivity extends BridgeActivity {
             }
         );
     }
-    
+
     /**
      * Entra em modo fullscreen imersivo (esconde todas as barras)
      * Usa WindowInsetsController para Android 11+ e setSystemUiVisibility para versões antigas
      */
     private void entrarFullscreenImersivo() {
         View decorView = getWindow().getDecorView();
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Android 11+ (API 30+) - Usa WindowInsetsController
             WindowInsetsController controller = decorView.getWindowInsetsController();
@@ -69,7 +68,7 @@ public class MainActivity extends BridgeActivity {
             decorView.setSystemUiVisibility(uiOptions);
         }
     }
-    
+
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
@@ -83,7 +82,7 @@ public class MainActivity extends BridgeActivity {
             }, 100);
         }
     }
-    
+
     @Override
     public void onResume() {
         super.onResume();
@@ -95,7 +94,7 @@ public class MainActivity extends BridgeActivity {
             }
         }, 100);
     }
-    
+
     @Override
     public void onStart() {
         super.onStart();
@@ -107,7 +106,7 @@ public class MainActivity extends BridgeActivity {
             }
         }, 100);
     }
-    
+
     @Override
     public void onPause() {
         super.onPause();
