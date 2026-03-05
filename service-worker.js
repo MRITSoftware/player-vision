@@ -26,7 +26,21 @@ let CURRENT_NS = "global"; // namespace da tela (ex.: CÓDIGO)
 const MAX_VIDEOS_PER_NS = 80;       // até 80 vídeos por tela
 const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por vídeo (aumentado para suportar vídeos maiores)
 
-function dlog(...args) { if (DEBUG_LOG) console.log("[SW]", ...args); }
+function dlog(...args) { 
+  // Sempre logar cache hits/misses e erros para debug offline
+  const firstArg = args[0];
+  const shouldLog = DEBUG_LOG || 
+    (typeof firstArg === 'string' && (
+      firstArg.includes("servindo") || 
+      firstArg.includes("cache") || 
+      firstArg.includes("erro") ||
+      firstArg.includes("vídeo") ||
+      firstArg.includes("Offline")
+    ));
+  if (shouldLog) {
+    console.log("[SW]", ...args); 
+  }
+}
 const nsKey = (url) => `${CURRENT_NS}::${url}`;
 
 // ===== IndexedDB Helpers =====
@@ -167,27 +181,94 @@ self.addEventListener("fetch", (event) => {
   // Vídeos (MP4/WebM...)
   if (isVideo) {
     event.respondWith((async () => {
-      const key = nsKey(req.url);
-      const blob = await idbGet(key);
+      // Função helper para buscar blob no cache (com fallback de URL)
+      const findCachedBlob = async (url) => {
+        // 1) Tentar com URL exata (com query params se houver)
+        let key = nsKey(url);
+        let blob = await idbGet(key);
+        if (blob) return { blob, key };
 
-      // 1) Se já temos no IDB, servimos do cache com suporte a Range (suave)
-      if (blob) {
-        return serveBlobWithRange(req, blob);
+        // 2) Tentar sem query params (caso tenha sido salvo sem query params)
+        try {
+          const urlObj = new URL(url);
+          const urlWithoutQuery = `${urlObj.origin}${urlObj.pathname}`;
+          if (urlWithoutQuery !== url) {
+            key = nsKey(urlWithoutQuery);
+            blob = await idbGet(key);
+            if (blob) {
+              dlog("vídeo encontrado sem query params:", urlWithoutQuery);
+              return { blob, key };
+            }
+          }
+        } catch {}
+
+        // 3) Tentar namespace "global" como fallback
+        if (CURRENT_NS !== "global") {
+          key = `global::${url}`;
+          blob = await idbGet(key);
+          if (blob) {
+            dlog("vídeo encontrado no cache global (fallback):", url);
+            return { blob, key };
+          }
+        }
+
+        return null;
+      };
+
+      // 1) PRIORIDADE: Verificar cache (com fallbacks)
+      const cached = await findCachedBlob(req.url);
+
+      // 2) Se encontramos no cache, servir
+      if (cached && cached.blob) {
+        dlog("servindo vídeo do cache (IDB):", req.url);
+        return serveBlobWithRange(req, cached.blob);
       }
 
-      // 2) Se NÃO temos cache:
-      //    - Requests com Range → rede direta (servidor responde 206)
-      //    - URLs do Supabase Storage → rede direta (evita CORS/Range issues)
+      // 3) Se NÃO temos cache, tentar rede:
+      //    - Requests com Range → tentar rede (servidor responde 206)
+      //    - URLs do Supabase Storage → tentar rede
+      //    - Se falhar (offline), verificar cache novamente antes de retornar erro
       if (hasRange || storageUrl) {
-        return fetch(req, { cache: "no-store" });
+        try {
+          const resp = await fetch(req, { cache: "no-store" });
+          // Se a rede funcionou, retornar resposta
+          if (resp && resp.ok) {
+            return resp;
+          }
+          // Se não funcionou (offline), verificar cache novamente
+          dlog("rede falhou, verificando cache novamente:", req.url);
+          const retryCached = await findCachedBlob(req.url);
+          if (retryCached && retryCached.blob) {
+            dlog("vídeo encontrado no cache após falha de rede (retry):", req.url);
+            return serveBlobWithRange(req, retryCached.blob);
+          }
+          dlog("rede falhou para vídeo sem cache:", req.url);
+          return new Response("Offline - video not cached", { status: 503 });
+        } catch (err) {
+          // Offline ou erro de rede - verificar cache novamente (pode ter sido adicionado)
+          const retryCached = await findCachedBlob(req.url);
+          if (retryCached && retryCached.blob) {
+            dlog("vídeo encontrado no cache após erro de rede (retry):", req.url);
+            return serveBlobWithRange(req, retryCached.blob);
+          }
+          dlog("erro de rede para vídeo sem cache:", req.url, err?.message);
+          return new Response("Offline - video not cached", { status: 503 });
+        }
       }
 
-      // 3) Caso contrário (vídeo externo sem cache), rede com timeout
+      // 4) Caso contrário (vídeo externo sem cache), rede com timeout
       try {
         const resp = await netFetch(req, undefined, 3500);
         return resp;
-      } catch {
-        return new Response("Offline", { status: 503 });
+      } catch (err) {
+        // Verificar cache novamente após timeout (pode ter sido adicionado)
+        const retryCached = await findCachedBlob(req.url);
+        if (retryCached && retryCached.blob) {
+          dlog("vídeo encontrado no cache após timeout (retry):", req.url);
+          return serveBlobWithRange(req, retryCached.blob);
+        }
+        dlog("timeout/rede falhou para vídeo sem cache:", req.url, err?.message);
+        return new Response("Offline - video not cached", { status: 503 });
       }
     })());
     return;
