@@ -3873,7 +3873,7 @@ if ('serviceWorker' in navigator) {
           );
           event.ports[0].postMessage({ valid: isValid });
         } else if (event.data.action === "cacheUpdated") {
-          console.log("ðŸ"¦ Cache atualizado pelo Service Worker");
+          console.log("📦 Cache atualizado pelo Service Worker");
           // Verificar se o cache está realmente completo antes de marcar como pronto
           // Aguardar um pouco para dar tempo do Service Worker terminar de processar
           if (codigoAtual) {
