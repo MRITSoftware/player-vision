@@ -242,7 +242,7 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     preloadEl.preload = "auto";
     preloadEl.muted = true;
     preloadEl.playsInline = true;
-    const preloadSrc = await resolveVideoSrcForPlayback(nextUrl, { preferCache: true, cacheOnly: false });
+    const preloadSrc = await resolveVideoSrcForPlayback(nextUrl, { cacheOnly: false });
     setVideoElementSource(preloadEl, preloadSrc);
     preloadEl.load();
     // Com cache carregado, pré-carregamento é muito mais rápido (vem do IndexedDB)
@@ -622,10 +622,12 @@ async function findCachedVideoBlob(url, preferredNamespace = codigoAtual) {
 }
 
 async function resolveVideoSrcForPlayback(url, opts = {}) {
-  const { preferCache = false, cacheOnly = false } = opts;
+  const { cacheOnly = false } = opts;
   if (!url || /\.m3u8(\?|$)/i.test(url)) return url;
 
-  const shouldPreferCache = !navigator.onLine || preferCache || cacheFullyReady;
+  // Em dispositivos fracos, ler Blob do IDB em runtime pode causar stutter.
+  // Use fallback por Blob apenas offline; online deixe o SW servir cache-first.
+  const shouldPreferCache = !navigator.onLine;
   if (!shouldPreferCache) return url;
 
   try {
@@ -2453,10 +2455,7 @@ async function tocarLoop() {
           if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
-        const resolvedSrc = await resolveVideoSrcForPlayback(itemUrl, {
-          preferCache: true,
-          cacheOnly: cacheFullyReady && navigator.onLine
-        });
+        const resolvedSrc = await resolveVideoSrcForPlayback(itemUrl, { cacheOnly: false });
         if (!resolvedSrc) {
           throw new Error("cache_only_miss");
         }
