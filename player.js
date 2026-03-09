@@ -8,9 +8,26 @@
 // - limpa src/load entre trocas
 // -------------------------------------------------------
 
+// Definir startPlayer logo no inÃ­cio para existir mesmo se o script falhar depois
+// (ex: Supabase nÃ£o carregou por falta de internet no APK)
+function startPlayer() {
+  if (typeof iniciar === 'function') {
+    iniciar();
+  } else {
+    alert('Player n\u00E3o carregou. Verifique a conex\u00E3o e recarregue a p\u00E1gina.');
+  }
+}
+window.startPlayer = startPlayer;
+
 const supabaseUrl = "https://base.muraltv.com.br";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUyODA3NjAwLCJleHAiOjE5MTA1NzQwMDB9.P4goMdCvXKPk9ViLYlSUk7nR_zeW3yUw5ixjv7Mk99g";
-const client = supabase.createClient(supabaseUrl, supabaseKey);
+let client;
+try {
+  client = (typeof supabase !== 'undefined') ? supabase.createClient(supabaseUrl, supabaseKey) : null;
+} catch (e) {
+  console.error('Supabase n\u00E3o carregou:', e);
+  client = null;
+}
 
 // ===== Constantes/estado =====
 const POLLING_MS = 1000; // 1 segundo para resposta instantÃ¢nea
@@ -875,7 +892,7 @@ async function verificarCodigoSalvo() {
     }
     
     // SEGUNDO: Buscar na tabela dispositivos (banco - fonte de verdade)
-    if (navigator.onLine) {
+    if (navigator.onLine && client) {
       try {
         const { data: dispositivo, error: dispositivoError } = await client
           .from("dispositivos")
@@ -1342,8 +1359,13 @@ async function verificarCodigoSalvo() {
 async function iniciar() {
   console.log('ðŸš€ iniciar() chamada');
   console.log('ðŸ“¡ Status online:', navigator.onLine);
-  console.log('ðŸ”— Supabase client:', typeof client !== 'undefined' ? 'disponÃ­vel' : 'NÃƒO DISPONÃVEL');
+  console.log('ðŸ”— Supabase client:', client ? 'disponÃ­vel' : 'NÃƒO DISPONÃVEL');
   
+  if (!client) {
+    console.error('Supabase não carregou - verifique a conexão');
+    alert('Player não carregou. Verifique a conexão e recarregue a página.');
+    return;
+  }
   // Debug temporÃ¡rio: alert no APK para ver se funÃ§Ã£o estÃ¡ sendo chamada
   if (window.matchMedia('(display-mode: standalone)').matches || document.referrer.includes('android-app://')) {
     console.log('ðŸ“± Detectado APK/PWA - funÃ§Ã£o iniciar() foi chamada');
