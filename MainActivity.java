@@ -9,6 +9,7 @@ import android.view.WindowManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.pm.ActivityInfo;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -17,6 +18,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // FORÇAR ORIENTAÇÃO PORTRAIT (VERTICAL)
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         // Manter tela ligada
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -86,6 +90,8 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        // FORÇAR ORIENTAÇÃO PORTRAIT sempre que retornar
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         // Reaplicar fullscreen ao retornar
         handler.postDelayed(new Runnable() {
             @Override
@@ -98,6 +104,8 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
+        // FORÇAR ORIENTAÇÃO PORTRAIT sempre que iniciar
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         // Reaplicar fullscreen ao iniciar
         handler.postDelayed(new Runnable() {
             @Override
