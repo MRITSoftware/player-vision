@@ -2419,6 +2419,13 @@ async function tocarLoop() {
   }
   if (!item || !itemUrl) {
     console.warn("[playback] all items unavailable/cooling down; waiting and retrying...");
+    // Se chegamos aqui, significa que todos os itens da playlist estão em cooldown
+    // ou inválidos. Para evitar loop infinito apenas em poucos itens, limpamos o
+    // estado de falha/cooldown e tentamos novamente em seguida.
+    if (itemFailureState.size > 0) {
+      console.warn("[playback] resetando cooldown de todos os itens para destravar a playlist");
+      itemFailureState.clear();
+    }
     setTimeout(() => tocarLoop(), 1000);
     return;
   }
