@@ -2,9 +2,9 @@ name: Build APK - Vision Player
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, rollback-d19174b ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, rollback-d19174b ]
   workflow_dispatch: # Permite executar manualmente
 
 jobs:
