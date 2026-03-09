@@ -2189,6 +2189,8 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     console.log("ðŸ’¡ Service Worker vai manter cache dos itens que estÃ£o na nova playlist");
     // NÃ£o limpar cache aqui - deixar o Service Worker fazer a limpeza inteligente
     // O Service Worker remove apenas os vÃ­deos que NÃƒO estÃ£o na nova playlist
+    // Importante: indicar imediatamente para o painel que o cache ainda nÃ£o estÃ¡ pronto para a nova programaÃ§Ã£o
+    await atualizarStatusCache(codigoAtual, false);
   } else if (codigoAtual && playlistAntiga.length > 0) {
     console.log("âœ… Playlist nÃ£o mudou, mantendo cache existente");
   }
@@ -2463,19 +2465,25 @@ async function tocarLoop() {
         }
         setVideoElementSource(nextVideo, resolvedSrc);
         nextVideo.load();
-        // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB
-        // Reduzir timeout quando não é primeiro ciclo (cache já está pronto)
-        // Se estiver offline, usar timeout ainda menor para detectar falha rapidamente
-        let timeout = isFirstCycle ? 6000 : 3000;
+        // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB.
+        // Online: dar mais tempo para vídeos longos iniciarem sem marcar falha.
+        // Offline: timeout curto para detectar rapidamente itens que não estão em cache.
+        let timeout;
         if (!navigator.onLine) {
-          // Offline: timeout muito curto para detectar rapidamente se não está em cache
           timeout = 2000;
+        } else {
+          timeout = isFirstCycle ? 8000 : 5000;
         }
         const ok = await waitForVideoReady(nextVideo, timeout);
         if (!ok || nextVideo.readyState < 3) {
           // Se está offline e não carregou, provavelmente não está em cache
           if (!navigator.onLine) {
             console.warn("⚠️ Vídeo não carregou offline - provavelmente não está em cache:", itemUrl);
+            // Marcar imediatamente o cache como não pronto, já que há pelo menos um item ausente.
+            cacheFullyReady = false;
+            if (codigoAtual) {
+              await atualizarStatusCache(codigoAtual, false);
+            }
           }
           throw new Error("video nao pronto");
         }
@@ -2625,6 +2633,13 @@ async function tocarLoop() {
         lastFailedRetries = 0;
         videoRetryCount = 0;
         isPlaying = false;
+        // Se falhou repetidamente offline, isso indica falta de cache para este item.
+        if (!navigator.onLine) {
+          cacheFullyReady = false;
+          if (codigoAtual) {
+            await atualizarStatusCache(codigoAtual, false);
+          }
+        }
         registerItemFailure(itemUrl, "load_failed_twice");
         proximoItem();
         return;
