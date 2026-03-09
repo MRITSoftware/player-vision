@@ -9,6 +9,7 @@ import android.view.WindowManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.pm.ActivityInfo;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -17,6 +18,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Travar a Activity sempre em modo portrait (vertical)
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         // Manter tela ligada
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
