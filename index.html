@@ -119,6 +119,16 @@
       z-index: 1;
       opacity: 1;
       transition: opacity 0.1s ease-in-out;
+      transform-origin: center center;
+    }
+
+    /* Quando o dispositivo estiver em landscape, "vira" o player para ocupar a tela como se fosse vertical.
+       Isso prioriza preencher a altura, aceitando corte em cima/baixo em vez de barras laterais enormes. */
+    html[data-orientation="landscape"] video,
+    html[data-orientation="landscape"] img {
+      /* A tela física é 16:9, o conteúdo é 9:16.
+         Giramos 90deg e aplicamos um pequeno scale para preencher bem. */
+      transform: translateZ(0) rotate(90deg) scale(1.25);
     }
     
     /* Elemento oculto mas pronto para exibir */

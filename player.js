@@ -807,18 +807,33 @@ async function verificarEAtualizarStatusCache() {
 }
 
 // ===== Orientation utils =====
-// Travar lógica interna sempre em portrait
-let ORIENTATION = "portrait"; // default e único modo suportado
+// Detecta orientação real da tela e permite ajustes de layout
+let ORIENTATION = "portrait";
 function detectOrientation() {
-  return "portrait";
+  try {
+    const w = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0;
+    const h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
+    if (!w || !h) return "portrait";
+    return w > h ? "landscape" : "portrait";
+  } catch {
+    return "portrait";
+  }
 }
-function applyOrientation(o = "portrait") {
-  ORIENTATION = "portrait";
-  document.documentElement.dataset.orientation = "portrait"; // opcional p/ CSS
+function applyOrientation(o) {
+  ORIENTATION = o === "landscape" ? "landscape" : "portrait";
+  document.documentElement.dataset.orientation = ORIENTATION;
 }
 function setupOrientationWatcher() {
-  // Apenas aplica portrait uma vez; ignora mudanças de rotação do dispositivo
-  applyOrientation("portrait");
+  const update = () => {
+    const o = detectOrientation();
+    applyOrientation(o);
+  };
+  update();
+  window.addEventListener("resize", () => {
+    // debounce leve para evitar thrash em redimensionamentos
+    clearTimeout(window.__mritOrientationTimer);
+    window.__mritOrientationTimer = setTimeout(update, 150);
+  });
 }
 
 // ===== Fit rules por orientaÃ§Ã£o/tipo =====
