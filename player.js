@@ -5005,8 +5005,9 @@ window.mritDebug = {
     console.log("ðŸ” Verificando cache para todos os itens da playlist...");
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
-      const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+      if (!url) continue;
+      const isVideo = isVideoItem(item, url);
+      const isImage = isImageItem(item, url);
       
       if (isVideo) {
         await this.checkCache(url);
@@ -5067,7 +5068,7 @@ window.mritDebug = {
     
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
+      const isVideo = isVideoItem(item, url);
       
       if (!isVideo) {
         console.log("â­ï¸ Pulando item nÃ£o-vÃ­deo:", url);
@@ -5100,7 +5101,7 @@ window.mritDebug = {
           
           // Baixar vÃ­deo com timeout maior
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 120000); // 120 segundos (aumentado para suportar internet lenta)
+          const timeoutId = setTimeout(() => controller.abort(), 1800000); // 30 minutos para suportar arquivos grandes
           
           const response = await fetch(url, { 
             method: 'GET',
@@ -5335,11 +5336,11 @@ window.mritDebug = {
     if (playlist && playlist.length > 0) {
       const videos = playlist.filter(item => {
         const url = pickSourceForOrientation(item);
-        return /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
+        return !!url && isVideoItem(item, url);
       });
       const imagens = playlist.filter(item => {
         const url = pickSourceForOrientation(item);
-        return /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+        return !!url && isImageItem(item, url);
       });
       console.log("ðŸ“Š VÃ­deos na playlist:", videos.length);
       console.log("ðŸ“Š Imagens na playlist:", imagens.length);
@@ -5350,8 +5351,9 @@ window.mritDebug = {
     if (playlist && playlist.length > 0) {
       for (const item of playlist) {
         const url = pickSourceForOrientation(item);
-        const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
-        const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+        if (!url) continue;
+        const isVideo = isVideoItem(item, url);
+        const isImage = isImageItem(item, url);
         if (isVideo) {
           await this.checkCache(url);
         } else if (isImage) {

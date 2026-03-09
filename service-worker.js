@@ -606,6 +606,7 @@ async function updateCacheForCurrentNS(playlist) {
 
   for (const item of playlist) {
     if (!item) continue;
+    const itemTipo = (item.tipo || "").toString().trim().toLowerCase();
 
     // Para garantir suporte a URLs diferentes por orientação, precache todas as variantes.
     const urlsToCache = [];
@@ -631,7 +632,15 @@ async function updateCacheForCurrentNS(playlist) {
       }
 
       try {
-      if (/\.m3u8(\?|$)/i.test(url)) {
+      const isHls = /\.m3u8(\?|$)/i.test(url);
+      const isImageByExt = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+      const isVideoByExt = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
+      const isImageByTipo = itemTipo.includes("imagem") || itemTipo.includes("image");
+      const isVideoByTipo = itemTipo.includes("video") || itemTipo.includes("vídeo");
+      const isImage = isImageByExt || (!isHls && isImageByTipo && !isVideoByExt);
+      const isVideo = isVideoByExt || (!isHls && isVideoByTipo);
+
+      if (isHls) {
         totalTargets++;
         const r = await netFetch(url, { cache: "no-store" }, 5000);
         if (r && r.ok) {
@@ -645,7 +654,7 @@ async function updateCacheForCurrentNS(playlist) {
         continue;
       }
 
-      if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)) {
+      if (isImage) {
         totalTargets++;
         // Verificar se já existe no cache antes de baixar
         const cached = await cache.match(url);
@@ -665,7 +674,7 @@ async function updateCacheForCurrentNS(playlist) {
         continue;
       }
 
-      if (/\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url)) {
+      if (isVideo) {
         totalTargets++;
         // Verificar se já existe no cache
         const existingBlob = await idbGet(nsKey(url));
@@ -680,7 +689,7 @@ async function updateCacheForCurrentNS(playlist) {
         // IMPORTANTE: Não bloquear reprodução - fazer em background com timeout maior
         dlog("baixando vídeo para cache (background):", url);
         
-        // Usar timeout muito maior para internet lenta (120s = 2 minutos)
+        // Usar timeout muito maior para internet lenta/arquivos grandes (30 minutos)
         // Isso evita que trave quando a internet está lenta
         // Adicionar retry automático para casos de queda de internet
         let retryCount = 0;
@@ -696,7 +705,7 @@ async function updateCacheForCurrentNS(playlist) {
               await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
             }
             
-            const headResp = await netFetch(parsedUrl, { method: "GET", cache: "no-store" }, 120000);
+            const headResp = await netFetch(parsedUrl, { method: "GET", cache: "no-store" }, 1800000);
             if (!headResp.ok) {
               dlog("falha ao baixar vídeo:", url, "status:", headResp.status);
               retryCount++;
