@@ -24,8 +24,8 @@ let CURRENT_NS = "global"; // namespace da tela (ex.: CÓDIGO)
 
 // Limites de cache (simples e efetivos)
 const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por video
-const VIDEO_FETCH_TIMEOUT_MS = 180000; // 3 minutos por video (evita bloquear toda a fila)
-const VIDEO_FETCH_MAX_RETRIES = 2; // total de 3 tentativas por video
+const VIDEO_FETCH_TIMEOUT_MS = 900000; // 15 minutos por video (suporta arquivos grandes/rede lenta)
+const VIDEO_FETCH_MAX_RETRIES = 4; // total de 5 tentativas por video
 
 function dlog(...args) { 
   // Sempre logar cache hits/misses e erros para debug offline

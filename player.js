@@ -2384,7 +2384,7 @@ async function salvarCache(playlistData, codigo) {
   postMessageToServiceWorker({
     action: "updateCache",
     playlist: playlistData
-  }, false).then((sent) => {
+  }, true).then((sent) => {
     if (!sent) {
       console.warn("[cache] Service Worker nao disponivel para cache automatico");
     }
@@ -5118,7 +5118,7 @@ window.mritDebug = {
     let cachedCount = 0;
     let failedCount = 0;
     const maxSize = 5 * 1024 * 1024 * 1024; // 5GB (alinhado com Service Worker MAX_VIDEO_BYTES)
-    const maxRetries = 2; // total de 3 tentativas por video
+    const maxRetries = 4; // total de 5 tentativas por video
     
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
@@ -5155,7 +5155,7 @@ window.mritDebug = {
           
           // Baixar vÃ­deo com timeout maior
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minutos por video
+          const timeoutId = setTimeout(() => controller.abort(), 900000); // 15 minutos por video
           
           const response = await fetch(url, { 
             method: 'GET',
