@@ -24,8 +24,13 @@ const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
 const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
 const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
+// Modo nativo (ExoPlayer) no APK:
+// - ENABLE_NATIVE_EXO_DEFAULT: tenta usar player nativo quando disponível
+// - NATIVE_ANDROID_NATIVE_MEDIA_ONLY: se true, obriga SEMPRE modo nativo (sem fallback web)
+// Para evitar tela preta em dispositivos/boxes onde o plugin nativo falha, deixamos
+// o modo nativo opcional, com fallback automático para o player web/HTML5.
 const ENABLE_NATIVE_EXO_DEFAULT = true;
-const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = true;
+const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = false;
 
 let playlist = [];
 let currentIndex = 0;
