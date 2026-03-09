@@ -1,4 +1,4 @@
-// player.js
+﻿// player.js
 // -------------------------------------------------------
 // MRIT Player â€“ vÃ­deo com CORS/Range-friendly + cache por tela
 // - cache por cÃ³digo de tela (namespaced)
@@ -13,8 +13,7 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsIm
 const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
-const POLLING_MS = 1000;
-const FORCE_PORTRAIT_CONTENT = true; // Sempre prioriza conteudo retrato (urlPortrait)
+const POLLING_MS = 1000; // 1 segundo para resposta instantÃ¢nea
 
 // ===== ConfiguraÃ§Ãµes de Buffering =====
 // Modos disponÃ­veis:
@@ -24,7 +23,10 @@ const FORCE_PORTRAIT_CONTENT = true; // Sempre prioriza conteudo retrato (urlPor
 const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
 const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
-const ITEM_FAILURES_BEFORE_COOLDOWN = 3;
+const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
+const ENABLE_NATIVE_EXO_DEFAULT = true;
+const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = true;
+
 let playlist = [];
 let currentIndex = 0;
 let currentPlaylistId = null;
@@ -56,10 +58,10 @@ let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
-let cacheFullyReady = false; // true apenas quando 100% dos itens da playlist estão em cache
-let playbackSuspended = false; // true quando exibição foi parada e login está ativo
-let contentLoadGeneration = 0; // invalida carregamentos assíncronos antigos
 const itemFailureState = new Map();
+let nativeExoListenerHandle = null;
+let nativeExoPendingToken = null;
+let nativeExoPendingUrl = null;
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
@@ -146,36 +148,157 @@ function isNativeAndroid() {
   }
 }
 
-// Compat: em algumas builds não existe player nativo; manter no-op para não quebrar fluxos de stop.
-async function stopNativeVideoPlayback() {
+function isNativeExoEnabled() {
   try {
-    const directFn = window.stopNativeVideoPlayback;
-    if (typeof directFn === "function") {
-      await directFn();
-      return;
-    }
+    const raw = localStorage.getItem("mrit_use_native_exo");
+    if (raw === "1" || raw === "true") return true;
+    if (raw === "0" || raw === "false") return false;
+  } catch {}
+  return ENABLE_NATIVE_EXO_DEFAULT && isNativeAndroid();
+}
 
-    const nativeVideo = window?.Capacitor?.Plugins?.NativeVideo;
-    if (nativeVideo && typeof nativeVideo.stop === "function") {
-      await nativeVideo.stop();
-      return;
-    }
+function getNativeExoPlugin() {
+  try {
+    return window.Capacitor?.Plugins?.MritExoPlayer || null;
+  } catch {
+    return null;
+  }
+}
+
+function nativeCallWithTimeout(promise, ms = 1500) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("native timeout")), ms))
+  ]);
+}
+
+function isNativeMediaModeActive() {
+  return isNativeAndroid() && isNativeExoEnabled() && NATIVE_ANDROID_NATIVE_MEDIA_ONLY;
+}
+
+async function ensureNativeExoListener() {
+  if (!isNativeExoEnabled()) return;
+  const plugin = getNativeExoPlugin();
+  if (!plugin || nativeExoListenerHandle) return;
+  try {
+    nativeExoListenerHandle = await plugin.addListener("state", (event) => {
+      const state = event?.state;
+      const token = event?.token ?? null;
+      const url = event?.url || nativeExoPendingUrl;
+      if (token === null || token !== String(nativeExoPendingToken)) return;
+
+      if (state === "ended") {
+        clearItemFailure(url);
+        isPlaying = false;
+        stopPlaybackWatchdog();
+        proximoItem();
+        verificarMudancasPosTrocaEmBackground();
+      } else if (state === "image_ready") {
+        clearItemFailure(url);
+      } else if (state === "error") {
+        registerItemFailure(url, "native_exo_error");
+        isPlaying = false;
+        stopPlaybackWatchdog();
+        if (lastFailedUrl === url) {
+          lastFailedRetries += 1;
+        } else {
+          lastFailedUrl = url;
+          lastFailedRetries = 1;
+        }
+        if (lastFailedRetries > 1) {
+          lastFailedUrl = null;
+          lastFailedRetries = 0;
+          proximoItem();
+        } else {
+          setTimeout(() => tocarLoop(), 150);
+        }
+      } else if (state === "image_error") {
+        registerItemFailure(url, "native_image_error");
+        isPlaying = false;
+        proximoItem();
+      }
+    });
   } catch (err) {
-    console.warn("⚠️ Falha ao parar player nativo:", err);
+    console.warn("Native Exo listener unavailable:", err?.message || err);
+  }
+}
+
+async function stopNativeVideoPlayback() {
+  if (!isNativeExoEnabled()) return;
+  const plugin = getNativeExoPlugin();
+  nativeExoPendingToken = null;
+  nativeExoPendingUrl = null;
+  if (!plugin) return;
+  try {
+    await nativeCallWithTimeout(plugin.stop(), 1200);
+  } catch {}
+}
+
+async function tryPlayWithNativeExo(item, itemUrl, token) {
+  if (!isNativeAndroid() || !isNativeExoEnabled()) return false;
+  const plugin = getNativeExoPlugin();
+  if (!plugin) return false;
+  try {
+    await ensureNativeExoListener();
+    // Primeiro ciclo: sempre usar internet direta (sem cache)
+    // Após primeiro ciclo: permitir cache para melhor performance
+    // TV boxes: sempre sem cache (já tratado no plugin nativo)
+    const useCache = !isFirstCycle;
+    const fit = item?.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
+    nativeExoPendingToken = token;
+    nativeExoPendingUrl = itemUrl;
+    await nativeCallWithTimeout(plugin.play({
+      url: itemUrl,
+      fit,
+      muted: true,
+      useCache,
+      token: String(token),
+    }), 2000);
+    console.log("[native-exo] play requested:", itemUrl, "useCache=", useCache, "isFirstCycle=", isFirstCycle);
+    for (const v of getUniqueVideoEls()) {
+      v.style.display = "none";
+    }
+    img.style.display = "none";
+    img.src = "";
+    clearItemFailure(itemUrl);
+    isPlaying = true;
+    isLoadingVideo = false;
+    return true;
+  } catch (err) {
+    console.warn("[native-exo] play failed, fallback to HTML video:", err?.message || err);
+    nativeExoPendingToken = null;
+    nativeExoPendingUrl = null;
+    return false;
+  }
+}
+
+async function tryShowImageNative(item, itemUrl, token) {
+  if (!isNativeAndroid() || !isNativeExoEnabled()) return false;
+  const plugin = getNativeExoPlugin();
+  if (!plugin) return false;
+  try {
+    await ensureNativeExoListener();
+    const fit = item?.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
+    nativeExoPendingToken = token;
+    nativeExoPendingUrl = itemUrl;
+    await nativeCallWithTimeout(plugin.showImage({
+      url: itemUrl,
+      fit,
+      token: String(token),
+    }), 2500);
+    clearItemFailure(itemUrl);
+    isPlaying = true;
+    return true;
+  } catch (err) {
+    console.warn("[native-media] image failed:", err?.message || err);
+    nativeExoPendingToken = null;
+    nativeExoPendingUrl = null;
+    return false;
   }
 }
 
 function startPlaybackWatchdog(videoEl, token, itemUrl) {
   stopPlaybackWatchdog();
-
-  // Em sticks/TV boxes o hardware é mais fraco e pode reportar progresso de forma irregular.
-  // Para evitar cortes prematuros (como vídeos curtos terminando antes da hora),
-  // desativamos o watchdog nesses dispositivos enquanto há internet.
-  // Se ficar offline, reativamos o watchdog para evitar travamento no item atual.
-  try {
-    if (typeof isTvBox === "function" && isTvBox() && navigator.onLine) return;
-  } catch {}
-
   let lastTime = -1;
   let lastProgressAt = Date.now();
 
@@ -194,8 +317,7 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
     }
 
     const stalledForMs = Date.now() - lastProgressAt;
-    const stallLimitMs = navigator.onLine ? 9000 : 18000;
-    if (stalledForMs >= stallLimitMs) {
+    if (stalledForMs >= 7000) {
       console.warn("⚠️ Vídeo travado por muito tempo, pulando item:", itemUrl);
       stopPlaybackWatchdog();
       isPlaying = false;
@@ -218,6 +340,42 @@ function isImageItem(item, itemUrl) {
   const tipo = (item?.tipo || "").toLowerCase();
   return tipo.includes("imagem") ||
     /\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?|$)/i.test(itemUrl);
+}
+
+async function nativePreloadUpcomingItem(baseIndex) {
+  if (!isNativeMediaModeActive()) return;
+  const plugin = getNativeExoPlugin();
+  if (!plugin || !Array.isArray(playlist) || playlist.length < 2) return;
+  
+  // Primeiro ciclo: não pré-carregar (usar internet direta)
+  if (isFirstCycle) return;
+
+  try {
+    const nextIndex = (baseIndex + 1) % playlist.length;
+    const nextItem = playlist[nextIndex];
+    if (!nextItem || !nextItem.url) return;
+    const nextUrl = pickSourceForOrientation(nextItem);
+    if (!nextUrl || isItemOnCooldown(nextUrl)) return;
+
+    const tipo = isImageItem(nextItem, nextUrl) ? "imagem" : "video";
+    // Após primeiro ciclo: permitir pré-carregamento de vídeos também
+    if (tipo === "video") {
+      // Pré-carregar vídeo apenas após primeiro ciclo
+      await nativeCallWithTimeout(plugin.preload({
+        url: nextUrl,
+        tipo,
+        token: String(playToken || 0),
+      }), 1000);
+    } else {
+      await nativeCallWithTimeout(plugin.preload({
+        url: nextUrl,
+        tipo,
+        token: String(playToken || 0),
+      }), 1000);
+    }
+  } catch {
+    // best effort
+  }
 }
 
 async function preloadUpcomingVideoInBuffer(baseIndex) {
@@ -246,17 +404,10 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     preloadEl.preload = "auto";
     preloadEl.muted = true;
     preloadEl.playsInline = true;
-    const preloadSrc = await resolveVideoSrcForPlayback(nextUrl, { cacheOnly: false });
-    setVideoElementSource(preloadEl, preloadSrc);
+    preloadEl.src = nextUrl;
     preloadEl.load();
-    // Com cache carregado, pré-carregamento é muito mais rápido (vem do IndexedDB)
-    // Reduzir timeout para pré-carregamento após primeiro ciclo
-    const preloadTimeout = 5000; // vídeos longos podem levar mais para sinalizar canplay
-    const ok = await waitForCanPlay(preloadEl, preloadTimeout);
-    if (ok) {
-      preloadedBufferUrl = nextUrl;
-      console.log("[preload] Próximo vídeo pré-carregado:", nextUrl);
-    }
+    const ok = await waitForCanPlay(preloadEl, 1500);
+    if (ok) preloadedBufferUrl = nextUrl;
   } catch {
     // best effort
   } finally {
@@ -586,111 +737,6 @@ async function idbAllKeys() {
   });
 }
 
-function getUrlWithoutQuery(url) {
-  try {
-    const u = new URL(url);
-    return `${u.origin}${u.pathname}`;
-  } catch {
-    return url;
-  }
-}
-
-async function findCachedVideoBlob(url, preferredNamespace = codigoAtual) {
-  if (!url) return null;
-
-  const cleanUrl = getUrlWithoutQuery(url);
-  const candidates = [url];
-  if (cleanUrl && cleanUrl !== url) candidates.push(cleanUrl);
-
-  const namespaces = [];
-  if (preferredNamespace) namespaces.push(String(preferredNamespace));
-  if (!namespaces.includes("global")) namespaces.push("global");
-
-  for (const ns of namespaces) {
-    for (const u of candidates) {
-      const blob = await idbGet(`${ns}::${u}`);
-      if (blob && blob.size > 0) return blob;
-    }
-  }
-
-  // Fallback final: procurar o mesmo URL em qualquer namespace.
-  const keys = await idbAllKeys();
-  for (const rawKey of keys) {
-    const ks = String(rawKey);
-    if (!candidates.some(u => ks.endsWith(`::${u}`))) continue;
-    const blob = await idbGet(ks);
-    if (blob && blob.size > 0) return blob;
-  }
-
-  return null;
-}
-
-async function resolveVideoSrcForPlayback(url, opts = {}) {
-  const { cacheOnly = false } = opts;
-  if (!url || /\.m3u8(\?|$)/i.test(url)) return url;
-
-  // Em dispositivos fracos, ler Blob do IDB em runtime pode causar stutter.
-  // Use fallback por Blob apenas offline; online deixe o SW servir cache-first.
-  const shouldPreferCache = !navigator.onLine;
-  if (!shouldPreferCache) return url;
-
-  try {
-    const blob = await findCachedVideoBlob(url, codigoAtual);
-    if (blob) {
-      return URL.createObjectURL(blob);
-    }
-  } catch (err) {
-    console.warn("⚠️ Falha ao resolver vídeo no IDB:", err);
-  }
-
-  if (cacheOnly) return null;
-  return url;
-}
-
-function revokeVideoObjectUrl(videoEl) {
-  if (!videoEl) return;
-  const old = videoEl.__mritObjectUrl;
-  if (old && typeof old === "string") {
-    try { URL.revokeObjectURL(old); } catch {}
-  }
-  videoEl.__mritObjectUrl = null;
-}
-
-function setVideoElementSource(videoEl, src) {
-  if (!videoEl) return;
-  revokeVideoObjectUrl(videoEl);
-  videoEl.src = src;
-  videoEl.__mritObjectUrl = (typeof src === "string" && src.startsWith("blob:")) ? src : null;
-}
-
-function clearVideoElementSource(videoEl) {
-  if (!videoEl) return;
-  revokeVideoObjectUrl(videoEl);
-  videoEl.removeAttribute("src");
-}
-
-async function postMessageToServiceWorker(message, waitForReady = true) {
-  if (!("serviceWorker" in navigator)) return false;
-
-  try {
-    if (navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage(message);
-      return true;
-    }
-    if (!waitForReady) return false;
-
-    const registration = await navigator.serviceWorker.ready;
-    const target = registration?.active || navigator.serviceWorker.controller;
-    if (!target) return false;
-
-    target.postMessage(message);
-    return true;
-  } catch (err) {
-    console.warn("⚠️ Falha ao enviar mensagem para Service Worker:", message?.action, err);
-    return false;
-  }
-}
-
 // ===== Cache helpers (namespaced por cÃ³digo) =====
 function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
@@ -752,13 +798,13 @@ async function verificarEAtualizarStatusCache() {
     // Verificar cada item da playlist
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      if (!url) continue;
-      const isVideo = isVideoItem(item, url);
-      const isImage = isImageItem(item, url);
+      const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+      const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
       
       if (isVideo) {
         totalVideos++;
-        const cachedBlob = await findCachedVideoBlob(url, codigoAtual);
+        const cacheKey = `${codigoAtual}::${url}`;
+        const cachedBlob = await idbGet(cacheKey);
         
         if (cachedBlob && cachedBlob.size > 0) {
           videosEmCache++;
@@ -785,29 +831,6 @@ async function verificarEAtualizarStatusCache() {
           console.log(`âš ï¸ Erro ao verificar cache da imagem: ${url}`, error);
           imagensFaltando.push(url);
         }
-      } else {
-        // Item sem tipo/extensao clara: exige presenca em cache para nao marcar falso "pronto".
-        totalVideos++;
-        const cachedBlob = await findCachedVideoBlob(url, codigoAtual);
-        if (cachedBlob && cachedBlob.size > 0) {
-          videosEmCache++;
-          console.log(`✅ Midia (tipo indefinido) em cache de video: ${url}`);
-          continue;
-        }
-        try {
-          const cache = await caches.open("mrit-player-cache-v13");
-          const cachedResponse = await cache.match(url);
-          if (cachedResponse && cachedResponse.ok) {
-            videosEmCache++;
-            console.log(`✅ Midia (tipo indefinido) em cache do SW: ${url}`);
-          } else {
-            videosFaltando.push(url);
-            console.log(`❌ Midia (tipo indefinido) nao em cache: ${url}`);
-          }
-        } catch (error) {
-          videosFaltando.push(url);
-          console.log(`⚠️ Erro ao verificar midia indefinida no cache: ${url}`, error);
-        }
       }
     }
     
@@ -815,13 +838,8 @@ async function verificarEAtualizarStatusCache() {
     const percentualVideos = totalVideos > 0 ? (videosEmCache / totalVideos) * 100 : 100;
     const percentualImagens = totalImagens > 0 ? (imagensEmCache / totalImagens) * 100 : 100;
     
-    // Cache sÃ³ Ã© considerado "PRONTO" quando TODOS os vÃ­deos e imagens da playlist
-    // estÃ£o em cache. Isso garante que, ao cortar a internet ou reiniciar o dispositivo,
-    // toda a programaÃ§Ã£o consiga rodar 100% offline sem travar.
-    const cacheProntoVideos = (totalVideos === 0) || (videosEmCache === totalVideos);
-    const cacheProntoImagens = (totalImagens === 0) || (imagensEmCache === totalImagens);
-    const cachePronto = cacheProntoVideos && cacheProntoImagens;
-    cacheFullyReady = cachePronto;
+    // Cache estÃ¡ pronto se 80% dos vÃ­deos OU 80% das imagens estÃ£o em cache
+    const cachePronto = percentualVideos >= 80 || percentualImagens >= 80;
     
     console.log(`ðŸ“Š Cache de VÃ­deos: ${videosEmCache}/${totalVideos} (${percentualVideos.toFixed(1)}%)`);
     console.log(`ðŸ“Š Cache de Imagens: ${imagensEmCache}/${totalImagens} (${percentualImagens.toFixed(1)}%)`);
@@ -850,39 +868,36 @@ async function verificarEAtualizarStatusCache() {
     return cachePronto;
   } catch (error) {
     console.error("âŒ Erro ao verificar cache:", error);
-    cacheFullyReady = false;
     await atualizarStatusCache(codigoAtual, false);
     return false;
   }
 }
 
 // ===== Orientation utils =====
-// Detecta orientação real da tela e permite ajustes de layout
-let ORIENTATION = "portrait";
+let ORIENTATION = "landscape"; // default
 function detectOrientation() {
-  try {
-    const w = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0;
-    const h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
-    if (!w || !h) return "portrait";
-    return w > h ? "landscape" : "portrait";
-  } catch {
-    return "portrait";
-  }
+  const so = (screen.orientation && screen.orientation.type) || "";
+  if (so.includes("portrait")) return "portrait";
+  if (so.includes("landscape")) return "landscape";
+  return (window.innerHeight > window.innerWidth) ? "portrait" : "landscape";
 }
-function applyOrientation(o) {
-  ORIENTATION = o === "landscape" ? "landscape" : "portrait";
-  document.documentElement.dataset.orientation = ORIENTATION;
+function applyOrientation(o = detectOrientation()) {
+  ORIENTATION = o;
+  document.documentElement.dataset.orientation = o; // opcional p/ CSS
 }
 function setupOrientationWatcher() {
-  const update = () => {
-    const o = detectOrientation();
-    applyOrientation(o);
-  };
-  update();
+  applyOrientation(detectOrientation());
+  if (screen.orientation && screen.orientation.addEventListener) {
+    screen.orientation.addEventListener("change", () => applyOrientation(detectOrientation()));
+  }
+  const mm = window.matchMedia("(orientation: portrait)");
+  if (mm && mm.addEventListener) {
+    mm.addEventListener("change", () => applyOrientation(detectOrientation()));
+  }
+  let rid = null;
   window.addEventListener("resize", () => {
-    // debounce leve para evitar thrash em redimensionamentos
-    clearTimeout(window.__mritOrientationTimer);
-    window.__mritOrientationTimer = setTimeout(update, 150);
+    clearTimeout(rid);
+    rid = setTimeout(() => applyOrientation(detectOrientation()), 150);
   });
 }
 
@@ -899,17 +914,7 @@ function applyFit(el, fit = "cover", pos = "center center") {
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
 function pickSourceForOrientation(item) {
-  const tipo = (item?.tipo || "").toLowerCase();
-  const baseUrl = (item?.url || "").toLowerCase();
-  const portraitUrl = (item?.urlPortrait || "").toLowerCase();
-  const landscapeUrl = (item?.urlLandscape || "").toLowerCase();
-  const isVideoLike = tipo.includes("video") ||
-    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv|m3u8)(\?|$)/i.test(baseUrl) ||
-    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv|m3u8)(\?|$)/i.test(portraitUrl) ||
-    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv|m3u8)(\?|$)/i.test(landscapeUrl);
-
-  if (FORCE_PORTRAIT_CONTENT && isVideoLike && item.urlPortrait) return item.urlPortrait;
-  if (ORIENTATION === "portrait" && item.urlPortrait) return item.urlPortrait;
+  if (ORIENTATION === "portrait" && item.urlPortrait)  return item.urlPortrait;
   if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
   return item.url;
 }
@@ -1563,7 +1568,6 @@ async function iniciar() {
   }
   
   codigoAtual = codigo;
-  playbackSuspended = false;
   
   // Configurar namespace no Service Worker IMEDIATAMENTE para usar cache correto
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -1768,12 +1772,7 @@ async function iniciar() {
   }
 
   // Reset agressivo ao trocar de cÃ³digo (garante que nada da sessÃ£o anterior vaze)
-  // IMPORTANTE: sÃ³ resetar se o cÃ³digo REALMENTE mudou.
-  // Se for o mesmo cÃ³digo (reboot / reconexÃ£o do mesmo display),
-  // mantemos o cache para permitir funcionamento 100% offline.
-  if (codigoAnterior && codigoAnterior !== codigo) {
-    await resetAllCachesForNewCode();
-  }
+  await resetAllCachesForNewCode();
 
   if (!navigator.onLine) {
     const cache = localStorage.getItem(cacheKeyFor(codigo));
@@ -1943,44 +1942,13 @@ async function iniciar() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(checarLockEConteudo, POLLING_MS);
     
-  // Verificação periódica do cache (a cada 60 segundos, ou 15 segundos se houver vídeos faltando)
+  // VerificaÃ§Ã£o periÃ³dica do cache (a cada 60 segundos)
   if (cacheCheckTimer) clearInterval(cacheCheckTimer);
-  let cacheCheckInterval = 60000; // 60 segundos por padrão
-  let cacheCheckInProgress = false; // Flag para evitar execuções simultâneas
-  
-  const verificarCachePeriodicamente = async () => {
-    // Evitar execuções simultâneas
-    if (cacheCheckInProgress) {
-      console.log("⏳ Verificação de cache já em andamento, pulando...");
-      return;
-    }
-    
+  cacheCheckTimer = setInterval(async () => {
     if (codigoAtual && playlist && playlist.length > 0) {
-      cacheCheckInProgress = true;
-      try {
-        const cachePronto = await verificarEAtualizarStatusCache();
-        
-        // Se o cache não está pronto, verificar mais frequentemente (15 segundos)
-        // Isso garante que quando a internet voltar, o cache seja retomado rapidamente
-        if (!cachePronto && cacheCheckInterval !== 15000) {
-          cacheCheckInterval = 15000;
-          if (cacheCheckTimer) clearInterval(cacheCheckTimer);
-          cacheCheckTimer = setInterval(verificarCachePeriodicamente, cacheCheckInterval);
-          console.log("🔄 Cache incompleto detectado, aumentando frequência de verificação para 15 segundos");
-        } else if (cachePronto && cacheCheckInterval !== 60000) {
-          // Se o cache estiver pronto, voltar para verificação a cada 60 segundos
-          cacheCheckInterval = 60000;
-          if (cacheCheckTimer) clearInterval(cacheCheckTimer);
-          cacheCheckTimer = setInterval(verificarCachePeriodicamente, cacheCheckInterval);
-          console.log("✅ Cache completo, voltando para verificação a cada 60 segundos");
-        }
-      } finally {
-        cacheCheckInProgress = false;
-      }
+      await verificarEAtualizarStatusCache();
     }
-  };
-  
-  cacheCheckTimer = setInterval(verificarCachePeriodicamente, cacheCheckInterval);
+  }, 60000);
 
     // Verificar promoÃ§Ã£o apÃ³s carregar conteÃºdo
     await verificarPromocao();
@@ -1994,14 +1962,6 @@ async function iniciar() {
 
 async function carregarConteudo(codigoConteudo) {
   try {
-    const loadGeneration = ++contentLoadGeneration;
-    const isStaleLoad = () =>
-      loadGeneration !== contentLoadGeneration ||
-      playbackSuspended ||
-      !codigoAtual;
-
-    if (isStaleLoad()) return;
-
     // Resetar flag de primeiro ciclo ao carregar novo conteúdo
     isFirstCycle = true;
     
@@ -2017,7 +1977,6 @@ async function carregarConteudo(codigoConteudo) {
       try {
         const data = JSON.parse(cacheSalvo);
         if (data.playlist && Array.isArray(data.playlist) && data.playlist.length > 0) {
-          if (isStaleLoad()) return;
           console.log("ðŸ“¦ Cache encontrado! Carregando playlist do cache:", data.playlist.length, "itens");
           
           // Configurar namespace no Service Worker para usar o cache correto
@@ -2045,10 +2004,9 @@ async function carregarConteudo(codigoConteudo) {
           await atualizarPlaylist(playlist, cachedPlaylistId, {
             wasPlaying, currentTime, wasVideo, currentUrl
           });
-          if (isStaleLoad()) return;
           
           // Iniciar reproduÃ§Ã£o imediatamente do cache
-          if (!isStaleLoad() && !isPlaying && !isLoadingVideo) {
+          if (!isPlaying && !isLoadingVideo) {
             tocarLoop();
           }
           
@@ -2077,7 +2035,6 @@ async function carregarConteudo(codigoConteudo) {
       .select("*")
       .eq("codigoAnuncio", codigoConteudo)
       .maybeSingle();
-    if (isStaleLoad()) return;
 
     if (conteudo) {
       const isImageType =
@@ -2101,7 +2058,6 @@ async function carregarConteudo(codigoConteudo) {
       await atualizarPlaylist(newPlaylist, null, {
         wasPlaying, currentTime, wasVideo, currentUrl
       });
-      if (isStaleLoad()) return;
       return;
     }
 
@@ -2111,7 +2067,6 @@ async function carregarConteudo(codigoConteudo) {
       .select("*")
       .eq("codigo_unico", codigoConteudo)
       .maybeSingle();
-    if (isStaleLoad()) return;
 
     if (!playlistData) return;
 
@@ -2120,7 +2075,6 @@ async function carregarConteudo(codigoConteudo) {
       .select("*")
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
-    if (isStaleLoad()) return;
 
     const newPlaylist = (itens || []).map(item => ({
       url: item.url,
@@ -2139,7 +2093,6 @@ async function carregarConteudo(codigoConteudo) {
     await atualizarPlaylist(newPlaylist, codigoConteudo, {
       wasPlaying, currentTime, wasVideo, currentUrl
     });
-    if (isStaleLoad()) return;
   } catch (err) {
     console.error(err);
   }
@@ -2259,14 +2212,11 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   // Se a playlist mudou, o Service Worker vai limpar apenas o que nÃ£o estÃ¡ na nova playlist
   // MantÃ©m automaticamente os vÃ­deos/imagens que estÃ£o na nova playlist (cache inteligente)
   if (playlistMudou && codigoAtual) {
-    cacheFullyReady = false;
     console.log("ðŸ”„ Playlist mudou, atualizando cache...");
     console.log(`ðŸ“Š Antes: ${playlistAntiga.length} itens | Depois: ${playlistNova.length} itens`);
     console.log("ðŸ’¡ Service Worker vai manter cache dos itens que estÃ£o na nova playlist");
     // NÃ£o limpar cache aqui - deixar o Service Worker fazer a limpeza inteligente
     // O Service Worker remove apenas os vÃ­deos que NÃƒO estÃ£o na nova playlist
-    // Importante: indicar imediatamente para o painel que o cache ainda nÃ£o estÃ¡ pronto para a nova programaÃ§Ã£o
-    await atualizarStatusCache(codigoAtual, false);
   } else if (codigoAtual && playlistAntiga.length > 0) {
     console.log("âœ… Playlist nÃ£o mudou, mantendo cache existente");
   }
@@ -2274,7 +2224,6 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   await salvarCache(playlist, (playlistId ?? codigoAtual));
 
   if (!playlist.length) {
-    cacheFullyReady = false;
     await stopNativeVideoPlayback();
     try { video.pause(); } catch {}
     destroyHls();
@@ -2377,27 +2326,25 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 }
 
 async function salvarCache(playlistData, codigo) {
-  // cache namespaced por codigo
+  // cache namespaced por cÃ³digo
   localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
 
-  console.log("[cache] Enviando playlist para Service Worker:", playlistData.length, "itens");
-  postMessageToServiceWorker({
-    action: "updateCache",
-    playlist: playlistData
-  }, true).then((sent) => {
-    if (!sent) {
-      console.warn("[cache] Service Worker nao disponivel para cache automatico");
-    }
-  }).catch(() => {});
-
-  // Nao marcar cache como pronto aqui.
-  // O status e atualizado apenas por verificarEAtualizarStatusCache(),
-  // depois de confirmar que todos os arquivos realmente estao em cache.
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    console.log("ðŸ“¤ Enviando playlist para Service Worker:", playlistData.length, "itens");
+    navigator.serviceWorker.controller.postMessage({
+      action: "updateCache",
+      playlist: playlistData
+    });
+  } else {
+    console.warn("âš ï¸ Service Worker nÃ£o disponÃ­vel para cache automÃ¡tico");
+  }
+  
+  // Atualizar status do cache na tabela displays
+  await atualizarStatusCache(codigo, true);
 }
 
 // Reset agressivo quando entra com um novo cÃ³digo
 async function resetAllCachesForNewCode() {
-  cacheFullyReady = false;
   // limpa caches antigos de playlists (todas as telas)
   Object.keys(localStorage).forEach(k => {
     if (k.startsWith("playlist_cache_")) localStorage.removeItem(k);
@@ -2409,7 +2356,7 @@ async function resetAllCachesForNewCode() {
   // zera os elementos de mÃ­dia (ativo + buffer)
   for (const v of getUniqueVideoEls()) {
     try { v.pause(); } catch {}
-    clearVideoElementSource(v);
+    v.removeAttribute("src");
     v.load();
   }
   preloadedBufferUrl = null;
@@ -2431,16 +2378,6 @@ async function resetAllCachesForNewCode() {
 }
 
 async function tocarLoop() {
-  if (playbackSuspended || !codigoAtual) {
-    await stopNativeVideoPlayback();
-    stopPlaybackWatchdog();
-    for (const v of getUniqueVideoEls()) v.style.display = "none";
-    img.style.display = "none";
-    isPlaying = false;
-    isLoadingVideo = false;
-    return;
-  }
-
   if (!playlist.length) {
     await stopNativeVideoPlayback();
     for (const v of getUniqueVideoEls()) v.style.display = "none";
@@ -2451,6 +2388,9 @@ async function tocarLoop() {
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+  if (!isNativeMediaModeActive()) {
+    await stopNativeVideoPlayback();
+  }
   stopPlaybackWatchdog();
   for (const v of getUniqueVideoEls()) v.onended = null;
   img.onload = null;
@@ -2489,13 +2429,27 @@ async function tocarLoop() {
   if (isVideo) {
     if (isLoadingVideo) { setTimeout(() => tocarLoop(), 60); return; }
 
+    const nativeOnlyMode = isNativeMediaModeActive();
+    const nativeStarted = await tryPlayWithNativeExo(item, itemUrl, myToken);
+    if (nativeStarted) {
+      nativePreloadUpcomingItem(currentIndex).catch(() => {});
+      return;
+    }
+    if (nativeOnlyMode) {
+      console.warn("[native-exo] strict mode active; skipping web fallback for:", itemUrl);
+      registerItemFailure(itemUrl, "native_exo_required");
+      isPlaying = false;
+      proximoItem();
+      return;
+    }
+
     isLoadingVideo = true;
     currentVideoToken++;
     const videoToken = currentVideoToken;
 
     const previousVideo = video;
     const nextVideo = (videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo;
-    const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 30000);
+    const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 15000);
 
     try {
       nextVideo.muted = true;
@@ -2505,12 +2459,10 @@ async function tocarLoop() {
 
       if (!isHls && preloadedBufferUrl === itemUrl && nextVideo.readyState >= 2) {
         // Buffer já aquecido: troca praticamente instantânea.
-        // Pular waitForVideoReady porque já está pronto
-        console.log("[playback] Vídeo pré-carregado detectado, troca instantânea");
       } else if (isHls) {
         destroyHls();
         if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
-          setVideoElementSource(nextVideo, itemUrl);
+          nextVideo.src = itemUrl;
           nextVideo.load();
           const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls nativo nao pronto");
@@ -2539,35 +2491,16 @@ async function tocarLoop() {
             });
           });
         } else {
-          setVideoElementSource(nextVideo, itemUrl);
+          nextVideo.src = itemUrl;
           nextVideo.load();
           const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
-        const resolvedSrc = await resolveVideoSrcForPlayback(itemUrl, { cacheOnly: false });
-        if (!resolvedSrc) {
-          throw new Error("cache_only_miss");
-        }
-        setVideoElementSource(nextVideo, resolvedSrc);
+        nextVideo.src = itemUrl;
         nextVideo.load();
-        // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB.
-        // Online: dar mais tempo para vídeos longos iniciarem sem marcar falha.
-        // Offline: timeout curto para detectar rapidamente itens que não estão em cache.
-        const timeout = getVideoLoadTimeoutMs();
-        const ok = await waitForVideoReady(nextVideo, timeout);
-        if (!ok || nextVideo.readyState < 2) {
-          // Se está offline e não carregou, provavelmente não está em cache
-          if (!navigator.onLine) {
-            console.warn("⚠️ Vídeo não carregou offline - provavelmente não está em cache:", itemUrl);
-            // Marcar imediatamente o cache como não pronto, já que há pelo menos um item ausente.
-            cacheFullyReady = false;
-            if (codigoAtual) {
-              await atualizarStatusCache(codigoAtual, false);
-            }
-          }
-          throw new Error("video nao pronto");
-        }
+        const ok = await waitForVideoReady(nextVideo, 6000);
+        if (!ok || nextVideo.readyState < 3) throw new Error("video nao pronto");
       }
 
       if (myToken !== playToken || videoToken !== currentVideoToken) {
@@ -2615,7 +2548,7 @@ async function tocarLoop() {
           previousVideo.classList.remove("hidden-ready");
           try {
             previousVideo.pause();
-            clearVideoElementSource(previousVideo);
+            previousVideo.removeAttribute("src");
             previousVideo.load();
           } catch {}
         }
@@ -2714,13 +2647,6 @@ async function tocarLoop() {
         lastFailedRetries = 0;
         videoRetryCount = 0;
         isPlaying = false;
-        // Se falhou repetidamente offline, isso indica falta de cache para este item.
-        if (!navigator.onLine) {
-          cacheFullyReady = false;
-          if (codigoAtual) {
-            await atualizarStatusCache(codigoAtual, false);
-          }
-        }
         registerItemFailure(itemUrl, "load_failed_twice");
         proximoItem();
         return;
@@ -2737,6 +2663,27 @@ async function tocarLoop() {
     return;
   }
 
+  if (isNativeMediaModeActive()) {
+    const nativeImageStarted = await tryShowImageNative(item, itemUrl, myToken);
+    if (nativeImageStarted) {
+      nativePreloadUpcomingItem(currentIndex).catch(() => {});
+      const imageDuration = (typeof duration === "number" && duration > 0) ? duration : 15000;
+      if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+      img.timeoutId = setTimeout(() => {
+        if (myToken !== playToken) return;
+        isPlaying = false;
+        proximoItem();
+        verificarMudancasPosTrocaEmBackground();
+      }, imageDuration);
+      return;
+    }
+    console.warn("[native-media] strict mode active; skipping web image fallback for:", itemUrl);
+    registerItemFailure(itemUrl, "native_image_required");
+    isPlaying = false;
+    proximoItem();
+    return;
+  }
+
   img.onload = () => {
     if (myToken !== playToken) return;
     stopNativeVideoPlayback().catch(() => {});
@@ -2748,7 +2695,7 @@ async function tocarLoop() {
       try {
         v.pause();
         v.currentTime = 0;
-        clearVideoElementSource(v);
+        v.removeAttribute("src");
         v.load();
       } catch {}
       v.style.display = "none";
@@ -2758,12 +2705,6 @@ async function tocarLoop() {
     preloadingBuffer = false;
     stopPlaybackWatchdog();
 
-    // Limpar imagem anterior antes de mostrar nova (evita frame anterior)
-    img.style.display = "none";
-    img.style.opacity = "0";
-    // Forçar repaint antes de mostrar nova imagem
-    void img.offsetHeight;
-    
     img.style.display = "block";
     img.classList.remove("hidden-ready");
     img.style.opacity = "1";
@@ -2789,19 +2730,7 @@ async function tocarLoop() {
     proximoItem();
   };
 
-  // Limpar imagem anterior antes de carregar nova (evita frame anterior)
-  img.style.display = "none";
-  img.style.opacity = "0";
-  img.src = "";
-  // Forçar limpeza do cache do navegador
-  if (img.complete) {
-    img.onload = null;
-    img.onerror = null;
-  }
-  // Pequeno delay para garantir limpeza antes de carregar nova (usar setTimeout para não bloquear)
-  setTimeout(() => {
-    img.src = itemUrl;
-  }, 10);
+  img.src = itemUrl;
 }
 
 
@@ -2811,12 +2740,6 @@ let lastNetworkCheck = 0;
 const NETWORK_CHECK_INTERVAL = 30000; // Verificar a cada 30s
 
 async function detectNetworkSpeed() {
-  if (!navigator.onLine) {
-    networkSpeed = "slow";
-    lastNetworkCheck = Date.now();
-    return "slow";
-  }
-
   const now = Date.now();
   if (now - lastNetworkCheck < NETWORK_CHECK_INTERVAL) {
     return networkSpeed; // Usar cache
@@ -2867,85 +2790,22 @@ function getAdaptiveTimeout(baseTimeout) {
   return baseTimeout;
 }
 
-function getVideoLoadTimeoutMs() {
-  // Offline com blob grande do IDB pode precisar de mais tempo para iniciar.
-  if (!navigator.onLine) {
-    return cacheFullyReady ? 7000 : 12000;
-  }
-  // Enquanto cache ainda aquece, aceitar startup mais lento para não pular item válido.
-  if (isFirstCycle || !cacheFullyReady) return 15000;
-  return 8000;
-}
-
 function waitForCanPlay(videoEl, timeoutMs = 7000) {
   return new Promise(async (resolve) => {
     if (videoEl.readyState >= 3) return resolve(true);
     
     // Ajustar timeout baseado na velocidade de rede
-    let adaptiveTimeout = timeoutMs;
-    if (navigator.onLine) {
-      adaptiveTimeout = await detectNetworkSpeed().then(speed => {
-        if (speed === 'slow') return timeoutMs * 3;
-        if (speed === 'fast') return timeoutMs * 0.7;
-        return timeoutMs;
-      });
-    }
+    const adaptiveTimeout = await detectNetworkSpeed().then(speed => {
+      if (speed === 'slow') return timeoutMs * 3;
+      if (speed === 'fast') return timeoutMs * 0.7;
+      return timeoutMs;
+    });
     
     let done = false;
-    let stalledCheckId = null;
-    const startedAt = Date.now();
     const onCanPlay = () => { if (!done) { done = true; cleanup(); resolve(true); } };
-    const onError = () => { 
-      if (!done) { 
-        done = true; 
-        cleanup(); 
-        console.warn("[waitForCanPlay] Erro ao carregar vídeo:", videoEl.error?.message || "erro desconhecido");
-        resolve(false); 
-      } 
-    };
-    const onStalled = () => {
-      // Evitar falha precoce: vídeos grandes podem emitir stalled antes de ficar tocáveis.
-      if (done || navigator.onLine || stalledCheckId) return;
-      stalledCheckId = setTimeout(() => {
-        if (done) return;
-        const elapsed = Date.now() - startedAt;
-        const hasBuffered = videoEl.buffered && videoEl.buffered.length > 0;
-        const hasProgress = videoEl.readyState >= 2 || hasBuffered;
-        if (!hasProgress && elapsed >= 7000) {
-          console.warn("[waitForCanPlay] Vídeo sem progresso offline por muito tempo, tratando como cache ausente");
-          done = true;
-          cleanup();
-          resolve(false);
-        }
-      }, 7000);
-    };
-    
-    const t = setTimeout(() => { 
-      if (!done) { 
-        done = true; 
-        cleanup(); 
-        // Se está offline e não carregou, provavelmente não está em cache
-        if (!navigator.onLine && videoEl.readyState < 3) {
-          console.warn("[waitForCanPlay] Timeout offline - vídeo provavelmente não está em cache");
-        }
-        resolve(false); 
-      } 
-    }, adaptiveTimeout);
-    
-    function cleanup() { 
-      clearTimeout(t);
-      if (stalledCheckId) {
-        clearTimeout(stalledCheckId);
-        stalledCheckId = null;
-      }
-      videoEl.removeEventListener("canplay", onCanPlay); 
-      videoEl.removeEventListener("error", onError);
-      videoEl.removeEventListener("stalled", onStalled);
-    }
-    
+    const t = setTimeout(() => { if (!done) { done = true; cleanup(); resolve(false); } }, adaptiveTimeout);
+    function cleanup() { clearTimeout(t); videoEl.removeEventListener("canplay", onCanPlay); }
     videoEl.addEventListener("canplay", onCanPlay, { once: true });
-    videoEl.addEventListener("error", onError, { once: true });
-    videoEl.addEventListener("stalled", onStalled, { once: true });
   });
 }
 
@@ -3553,8 +3413,9 @@ async function verificarMudancaDispositivo() {
     
     const { data: dispositivo, error } = await client
       .from("dispositivos")
-      .select("codigo_display, local_nome, is_ativo")
+      .select("codigo_display, local_nome")
       .eq("device_id", deviceId)
+      .eq("is_ativo", true)
       .maybeSingle();
     
     if (error) {
@@ -3566,38 +3427,8 @@ async function verificarMudancaDispositivo() {
       return;
     }
     
-    // Se dispositivo não existe, foi desassociado ou está inativo
-    if (!dispositivo || !dispositivo.is_ativo || !dispositivo.codigo_display) {
-      console.log("🛑 Dispositivo desassociado ou inativo, parando exibição...");
-      
-      // Desbloquear display atual
-      if (codigoAtual) {
-        try {
-          await client
-            .from("displays")
-            .update({ is_locked: false, status: "Disponível" })
-            .eq("codigo_unico", codigoAtual);
-        } catch (err) {
-          console.warn("⚠️ Erro ao desbloquear display:", err);
-        }
-      }
-      
-      // Limpar localStorage
-      localStorage.removeItem(CODIGO_DISPLAY_KEY);
-      localStorage.removeItem(LOCAL_TELA_KEY);
-      
-      // Limpar cache do namespace antes de sair
-      if (navigator.serviceWorker?.controller) {
-        navigator.serviceWorker.controller.postMessage({ action: "clearNamespace" });
-      }
-      
-      // Parar tudo e mostrar tela de login
-      await pararTudoMostrarLogin();
-      return;
-    }
-    
     if (dispositivo && dispositivo.codigo_display && dispositivo.codigo_display !== codigoAtual) {
-      console.log("Mudança detectada via polling:", codigoAtual, "->", dispositivo.codigo_display);
+      console.log("ðŸ”„ MudanÃ§a detectada via polling:", codigoAtual, "â†’", dispositivo.codigo_display);
       
       // Mesma lÃ³gica do realtime
       const novoCodigo = dispositivo.codigo_display;
@@ -3664,16 +3495,13 @@ async function verificarMudancaDispositivo() {
 
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
-  playbackSuspended = true;
-  contentLoadGeneration++;
-  cacheFullyReady = false;
   // Parar e esconder vÃ­deos (ativo + buffer)
   await stopNativeVideoPlayback();
   for (const v of getUniqueVideoEls()) {
     try {
       v.pause();
       v.currentTime = 0;
-      clearVideoElementSource(v);
+      v.removeAttribute("src");
       v.load();
     } catch {}
     v.style.display = "none";
@@ -3710,33 +3538,6 @@ async function pararTudoMostrarLogin() {
   currentIndex = 0;
   currentItemUrl = null;
   isPlaying = false;
-
-  // Parar loops/background que podem religar mídia após mostrar o login.
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  if (cacheCheckTimer) {
-    clearInterval(cacheCheckTimer);
-    cacheCheckTimer = null;
-  }
-  if (dispositivosCheckTimer) {
-    clearInterval(dispositivosCheckTimer);
-    dispositivosCheckTimer = null;
-  }
-  if (playlistChannel) {
-    client.removeChannel(playlistChannel);
-    playlistChannel = null;
-  }
-  if (displaysChannel) {
-    client.removeChannel(displaysChannel);
-    displaysChannel = null;
-  }
-  if (dispositivosChannel) {
-    client.removeChannel(dispositivosChannel);
-    dispositivosChannel = null;
-  }
-  realtimeReady = false;
   
   // Limpar promoÃ§Ã£o
   fecharPopupPromocao();
@@ -3924,8 +3725,6 @@ function stopFullscreenMonitoring() {
 }
 
 function mostrarLogin() {
-  playbackSuspended = true;
-
   // Parar monitoramento de fullscreen
   stopFullscreenMonitoring();
   
@@ -4142,18 +3941,10 @@ if ('serviceWorker' in navigator) {
           );
           event.ports[0].postMessage({ valid: isValid });
         } else if (event.data.action === "cacheUpdated") {
-          console.log("📦 Cache atualizado pelo Service Worker", event.data);
-          if (event.data.complete === false) {
-            cacheFullyReady = false;
-            if (codigoAtual) {
-              atualizarStatusCache(codigoAtual, false).catch(() => {});
-            }
-          }
-          // Verificar localmente antes de marcar como pronto.
+          console.log("ðŸ“¦ Cache atualizado pelo Service Worker");
+          // Atualizar status do cache no banco
           if (codigoAtual) {
-            setTimeout(async () => {
-              await verificarEAtualizarStatusCache();
-            }, event.data.complete === false ? 800 : 3000);
+            atualizarStatusCache(codigoAtual, true);
           }
         }
       });
@@ -4167,62 +3958,10 @@ if ('serviceWorker' in navigator) {
 
 // ===== UI Events / Heartbeat / Unlock =====
 
-async function sendHeartbeatNow(reason = "unknown") {
-  if (!codigoAtual || !navigator.onLine) return false;
-  const nowIso = new Date().toISOString();
-  const updateData = {
-    status_tela: "Online",
-    last_ping: nowIso
-  };
-
-  try {
-    const deviceId = gerarDeviceId();
-    updateData.device_id = deviceId;
-    updateData.device_last_seen = nowIso;
-  } catch {
-    // device_id opcional
-  }
-
-  try {
-    const { error } = await client
-      .from("displays")
-      .update(updateData)
-      .eq("codigo_unico", codigoAtual);
-
-    if (error) throw error;
-    console.log(`[heartbeat] enviado (${reason}) para ${codigoAtual} em ${nowIso}`);
-    return true;
-  } catch (err) {
-    // Fallback para schemas antigos sem colunas opcionais
-    if (err.message && err.message.includes("column") && err.message.includes("does not exist")) {
-      try {
-        const { error: fallbackError } = await client
-          .from("displays")
-          .update({
-            status_tela: "Online",
-            last_ping: nowIso
-          })
-          .eq("codigo_unico", codigoAtual);
-        if (fallbackError) throw fallbackError;
-        console.log(`[heartbeat] enviado fallback (${reason}) para ${codigoAtual} em ${nowIso}`);
-        return true;
-      } catch (fallbackErr) {
-        console.warn("[heartbeat] falha no fallback:", fallbackErr?.message || fallbackErr);
-      }
-    } else {
-      console.warn("[heartbeat] falha ao enviar:", err?.message || err);
-    }
-  }
-
-  return false;
-}
 // Debounce do evento online
 window.addEventListener("online", () => {
   if (onlineDebounceId) clearTimeout(onlineDebounceId);
   onlineDebounceId = setTimeout(async () => {
-    if (codigoAtual) {
-      await sendHeartbeatNow("online_event");
-    }
     if (codigoAtual) {
       try {
         const deviceId = gerarDeviceId();
@@ -4304,34 +4043,45 @@ window.addEventListener("online", () => {
     } else if (codigoAtual) {
       await carregarConteudo(currentPlaylistId || codigoAtual);
     }
-    
-    // IMPORTANTE: Verificar e retomar cache quando a internet voltar
-    // Isso garante que vídeos que falharam durante a queda de internet sejam baixados novamente
-    if (codigoAtual && playlist && playlist.length > 0) {
-      console.log("🔄 Retomando verificação de cache após internet voltar...");
-      
-      // Notificar o Service Worker para retomar downloads
-      const sent = await postMessageToServiceWorker({
-        action: "updateCache",
-        playlist: playlist
-      }, true);
-      if (sent) {
-        console.log("[cache] Notificacao enviada ao Service Worker para retomar cache");
-      } else {
-        console.warn("[cache] Falha ao notificar Service Worker para retomar cache");
-      }
-      
-      // Aguardar um pouco para garantir que a conexão está estável
-      setTimeout(async () => {
-        await verificarEAtualizarStatusCache();
-      }, 2000);
-    }
   }, 1200);
 });
 
 setInterval(async () => {
   if (codigoAtual && navigator.onLine) {
-    await sendHeartbeatNow("interval_5min");
+    try {
+      // AtualizaÃ§Ã£o bÃ¡sica (sempre funciona)
+      const updateData = { 
+        status_tela: "Online", 
+        last_ping: new Date().toISOString()
+      };
+      
+      // Tentar adicionar campos de dispositivo (opcional)
+      try {
+        const deviceId = gerarDeviceId();
+        updateData.device_id = deviceId;
+        updateData.device_last_seen = new Date().toISOString();
+      } catch {
+        // Ignorar se device_id nÃ£o puder ser gerado
+      }
+      
+      await client
+        .from("displays")
+        .update(updateData)
+        .eq("codigo_unico", codigoAtual);
+    } catch (err) {
+      // Se erro for de coluna nÃ£o encontrada, fazer update sem campos opcionais
+      if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
+        try {
+          await client
+            .from("displays")
+            .update({ 
+              status_tela: "Online", 
+              last_ping: new Date().toISOString()
+            })
+            .eq("codigo_unico", codigoAtual);
+        } catch {}
+      }
+    }
   }
 }, 5 * 60 * 1000);
 
@@ -5059,9 +4809,8 @@ window.mritDebug = {
     console.log("ðŸ” Verificando cache para todos os itens da playlist...");
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      if (!url) continue;
-      const isVideo = isVideoItem(item, url);
-      const isImage = isImageItem(item, url);
+      const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+      const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
       
       if (isVideo) {
         await this.checkCache(url);
@@ -5117,12 +4866,21 @@ window.mritDebug = {
     
     let cachedCount = 0;
     let failedCount = 0;
-    const maxSize = 5 * 1024 * 1024 * 1024; // 5GB (alinhado com Service Worker MAX_VIDEO_BYTES)
-    const maxRetries = 4; // total de 5 tentativas por video
+    // Permitir cache de playlists grandes (alinhado ao Service Worker):
+    // - Até 50 vídeos (ou todos, se a playlist tiver menos que isso)
+    // - Até 5GB por vídeo
+    const maxVideos = 50;
+    const maxSize = 5 * 1024 * 1024 * 1024; // 5GB
+    const maxRetries = 5;
     
     for (const item of playlist) {
+      if (cachedCount >= maxVideos) {
+        console.log("âš ï¸ Limite de vÃ­deos atingido");
+        break;
+      }
+      
       const url = pickSourceForOrientation(item);
-      const isVideo = isVideoItem(item, url);
+      const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
       
       if (!isVideo) {
         console.log("â­ï¸ Pulando item nÃ£o-vÃ­deo:", url);
@@ -5155,7 +4913,7 @@ window.mritDebug = {
           
           // Baixar vÃ­deo com timeout maior
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 900000); // 15 minutos por video
+          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 segundos
           
           const response = await fetch(url, { 
             method: 'GET',
@@ -5206,9 +4964,10 @@ window.mritDebug = {
     
     console.log(`ðŸŽ‰ Cache concluÃ­do: ${cachedCount} vÃ­deos armazenados, ${failedCount} falharam`);
     
-    // NÃO atualizar status do cache aqui - deixar verificarEAtualizarStatusCache() fazer isso
-    // Isso garante que o status só seja marcado como "pronto" quando TODOS os vídeos estiverem em cache
-    // A função verificarEAtualizarStatusCache() será chamada automaticamente pela verificação periódica
+    // Atualizar status do cache no banco
+    if (cachedCount > 0) {
+      await atualizarStatusCache(codigoAtual, true);
+    }
     
     return { cachedCount, failedCount };
   },
@@ -5360,16 +5119,9 @@ window.mritDebug = {
       console.log("âŒ Nenhum cÃ³digo de tela ativo");
       return;
     }
-
-    if (status) {
-      const pronto = await verificarEAtualizarStatusCache();
-      console.log(`ðŸ”„ Status solicitado=pronto; resultado real: ${pronto ? 'pronto' : 'nÃ£o pronto'}`);
-      return;
-    }
-
-    cacheFullyReady = false;
-    await atualizarStatusCache(codigoAtual, false);
-    console.log("ðŸ”„ Status do cache forÃ§ado para: nÃ£o pronto");
+    
+    await atualizarStatusCache(codigoAtual, status);
+    console.log(`ðŸ”„ Status do cache forÃ§ado para: ${status ? 'pronto' : 'nÃ£o pronto'}`);
   },
   async verificarCacheCompleto() {
     console.log("ðŸ” VerificaÃ§Ã£o completa do cache...");
@@ -5390,11 +5142,11 @@ window.mritDebug = {
     if (playlist && playlist.length > 0) {
       const videos = playlist.filter(item => {
         const url = pickSourceForOrientation(item);
-        return !!url && isVideoItem(item, url);
+        return /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
       });
       const imagens = playlist.filter(item => {
         const url = pickSourceForOrientation(item);
-        return !!url && isImageItem(item, url);
+        return /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
       });
       console.log("ðŸ“Š VÃ­deos na playlist:", videos.length);
       console.log("ðŸ“Š Imagens na playlist:", imagens.length);
@@ -5405,9 +5157,8 @@ window.mritDebug = {
     if (playlist && playlist.length > 0) {
       for (const item of playlist) {
         const url = pickSourceForOrientation(item);
-        if (!url) continue;
-        const isVideo = isVideoItem(item, url);
-        const isImage = isImageItem(item, url);
+        const isVideo = /\.(mp4|webm|mkv|mov|avi)(\?|$)/i.test(url);
+        const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
         if (isVideo) {
           await this.checkCache(url);
         } else if (isImage) {
@@ -5559,4 +5310,5 @@ window.mritDebug = {
     }
   }
 };
+
 
