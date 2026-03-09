@@ -1,4 +1,4 @@
-﻿// player.js
+// player.js
 // -------------------------------------------------------
 // MRIT Player â€“ vÃ­deo com CORS/Range-friendly + cache por tela
 // - cache por cÃ³digo de tela (namespaced)
@@ -807,31 +807,18 @@ async function verificarEAtualizarStatusCache() {
 }
 
 // ===== Orientation utils =====
-let ORIENTATION = "landscape"; // default
+// Travar lógica interna sempre em portrait
+let ORIENTATION = "portrait"; // default e único modo suportado
 function detectOrientation() {
-  const so = (screen.orientation && screen.orientation.type) || "";
-  if (so.includes("portrait")) return "portrait";
-  if (so.includes("landscape")) return "landscape";
-  return (window.innerHeight > window.innerWidth) ? "portrait" : "landscape";
+  return "portrait";
 }
-function applyOrientation(o = detectOrientation()) {
-  ORIENTATION = o;
-  document.documentElement.dataset.orientation = o; // opcional p/ CSS
+function applyOrientation(o = "portrait") {
+  ORIENTATION = "portrait";
+  document.documentElement.dataset.orientation = "portrait"; // opcional p/ CSS
 }
 function setupOrientationWatcher() {
-  applyOrientation(detectOrientation());
-  if (screen.orientation && screen.orientation.addEventListener) {
-    screen.orientation.addEventListener("change", () => applyOrientation(detectOrientation()));
-  }
-  const mm = window.matchMedia("(orientation: portrait)");
-  if (mm && mm.addEventListener) {
-    mm.addEventListener("change", () => applyOrientation(detectOrientation()));
-  }
-  let rid = null;
-  window.addEventListener("resize", () => {
-    clearTimeout(rid);
-    rid = setTimeout(() => applyOrientation(detectOrientation()), 150);
-  });
+  // Apenas aplica portrait uma vez; ignora mudanças de rotação do dispositivo
+  applyOrientation("portrait");
 }
 
 // ===== Fit rules por orientaÃ§Ã£o/tipo =====
