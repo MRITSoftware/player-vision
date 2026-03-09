@@ -35,7 +35,7 @@ call npm install -g @pwabuilder/cli
 
 REM Gerar APK
 echo 🔨 Gerando APK...
-call pwabuilder android --manifest ./manifest.json --package com.mritsoftware.player --name "MRIT Player" --short-name "MRIT" --display standalone --orientation any --theme-color "#000000" --background-color "#000000" --skipPwaValidation
+call pwabuilder android --manifest ./manifest.json --package com.mritsoftware.player --name "MRIT Player" --short-name "MRIT" --display standalone --orientation portrait --theme-color "#000000" --background-color "#000000" --skipPwaValidation
 
 echo ✅ APK gerado com sucesso!
 echo 📦 O APK está em: .\android\app\build\outputs\apk\

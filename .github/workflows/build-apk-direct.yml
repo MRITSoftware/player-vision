@@ -57,7 +57,7 @@ jobs:
           --display-mode standalone \
           --theme-color "#000000" \
           --background-color "#000000" \
-          --orientation any \
+          --orientation portrait \
           --skipPwaValidation \
           --yes
         

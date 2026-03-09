@@ -51,7 +51,7 @@ jobs:
           --name "MRIT Player" \
           --short-name "MRIT" \
           --display standalone \
-          --orientation any \
+          --orientation portrait \
           --theme-color "#000000" \
           --background-color "#000000" \
           --skipPwaValidation \
@@ -72,7 +72,7 @@ jobs:
               --display-mode standalone \
               --theme-color "#000000" \
               --background-color "#000000" \
-              --orientation any \
+              --orientation portrait \
               --skipPwaValidation \
               --yes || exit 1
             
