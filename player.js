@@ -216,6 +216,19 @@ function isImageItem(item, itemUrl) {
     /\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?|$)/i.test(itemUrl);
 }
 
+function normalizeVideoOnlyPlaylist(items) {
+  const list = Array.isArray(items) ? items : [];
+  return list.filter((item) => {
+    if (!item) return false;
+    const urls = [item.url, item.urlPortrait, item.urlLandscape].filter(Boolean);
+    return urls.some((u) => isVideoItem(item, String(u)));
+  }).map((item) => ({
+    ...item,
+    // Video-only: duration por tempo de mídia, não por timeout de imagem.
+    duration: null,
+  }));
+}
+
 async function preloadUpcomingVideoInBuffer(baseIndex) {
   try {
     // Primeiro ciclo: não pré-carregar (usar internet direta)
@@ -741,23 +754,7 @@ async function verificarEAtualizarStatusCache() {
           console.log(`âŒ VÃ­deo nÃ£o em cache: ${url}`);
         }
       } else if (isImage) {
-        totalImagens++;
-        // Verificar se imagem estÃ¡ no cache do Service Worker
-        try {
-          const cache = await caches.open("mrit-player-cache-v13");
-          const cachedResponse = await cache.match(url);
-          
-          if (cachedResponse && cachedResponse.ok) {
-            imagensEmCache++;
-            console.log(`âœ… Imagem em cache: ${url}`);
-          } else {
-            imagensFaltando.push(url);
-            console.log(`âŒ Imagem nÃ£o em cache: ${url}`);
-          }
-        } catch (error) {
-          console.log(`âš ï¸ Erro ao verificar cache da imagem: ${url}`, error);
-          imagensFaltando.push(url);
-        }
+        // Video-only: imagens são ignoradas no status de prontidão.
       }
     }
     
@@ -769,12 +766,11 @@ async function verificarEAtualizarStatusCache() {
     // estÃ£o em cache. Isso garante que, ao cortar a internet ou reiniciar o dispositivo,
     // toda a programaÃ§Ã£o consiga rodar 100% offline sem travar.
     const cacheProntoVideos = (totalVideos === 0) || (videosEmCache === totalVideos);
-    const cacheProntoImagens = (totalImagens === 0) || (imagensEmCache === totalImagens);
-    const cachePronto = cacheProntoVideos && cacheProntoImagens;
+    const cachePronto = cacheProntoVideos;
     cacheFullyReady = cachePronto;
     
     console.log(`ðŸ“Š Cache de VÃ­deos: ${videosEmCache}/${totalVideos} (${percentualVideos.toFixed(1)}%)`);
-    console.log(`ðŸ“Š Cache de Imagens: ${imagensEmCache}/${totalImagens} (${percentualImagens.toFixed(1)}%)`);
+    console.log(`ðŸ“Š Cache de Imagens: ${imagensEmCache}/${totalImagens} (${percentualImagens.toFixed(1)}%) - ignorado (video-only)`);
     console.log(`ðŸ“Š Status: ${cachePronto ? 'âœ… Pronto' : 'âŒ NÃ£o pronto'}`);
     
     // Se hÃ¡ vÃ­deos faltando, forÃ§ar cache direto
@@ -788,11 +784,7 @@ async function verificarEAtualizarStatusCache() {
       }
     }
     
-    // Se hÃ¡ imagens faltando, forÃ§ar cache de imagens
-    if (imagensFaltando.length > 0) {
-      console.log("ðŸ”„ Imagens faltando no cache, forÃ§ando cache de imagens...");
-      await mritDebug.forcarCacheImagens();
-    }
+    // Video-only: não forçar cache de imagens.
     
     // Atualizar status no banco
     await atualizarStatusCache(codigoAtual, cachePronto);
@@ -2010,15 +2002,15 @@ async function carregarConteudo(codigoConteudo) {
         (conteudo.tipo || "").toLowerCase() === "imagem" ||
         /\.(jpg|jpeg|png|webp)(\?|$)/i.test(conteudo.url);
 
-      const newPlaylist = [{
+      const newPlaylist = normalizeVideoOnlyPlaylist([{
         url: conteudo.url,
         tipo: conteudo.tipo,
-        duration: isImageType ? 0 : null, // imagem Ãºnica fica estÃ¡tica
+        duration: isImageType ? 0 : null, // será normalizado para video-only
         fit: conteudo.fit ?? null,
         focus: conteudo.focus ?? null,
         urlPortrait: conteudo.urlPortrait ?? null,
         urlLandscape: conteudo.urlLandscape ?? null,
-      }];
+      }]);
 
       currentPlaylistId = null; // indica conteÃºdo Ãºnico
       currentContentCode = codigoConteudo;
@@ -2045,7 +2037,7 @@ async function carregarConteudo(codigoConteudo) {
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
 
-    const newPlaylist = (itens || []).map(item => ({
+    const newPlaylist = normalizeVideoOnlyPlaylist((itens || []).map(item => ({
       url: item.url,
       tipo: item.tipo || "VÃ­deo",
       duration: item.tipo?.toLowerCase() === "imagem" ? 15000 : null,
@@ -2053,7 +2045,7 @@ async function carregarConteudo(codigoConteudo) {
       focus: item.focus ?? null,
       urlPortrait: item.urlPortrait ?? null,
       urlLandscape: item.urlLandscape ?? null,
-    }));
+    })));
 
     currentPlaylistId = codigoConteudo;
     currentContentCode = codigoConteudo;
@@ -2083,7 +2075,7 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
         (conteudo.tipo || "").toLowerCase() === "imagem" ||
         /\.(jpg|jpeg|png|webp)(\?|$)/i.test(conteudo.url);
 
-      const newPlaylist = [{
+      const newPlaylist = normalizeVideoOnlyPlaylist([{
         url: conteudo.url,
         tipo: conteudo.tipo,
         duration: isImageType ? 0 : null,
@@ -2091,7 +2083,7 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
         focus: conteudo.focus ?? null,
         urlPortrait: conteudo.urlPortrait ?? null,
         urlLandscape: conteudo.urlLandscape ?? null,
-      }];
+      }]);
 
       // Comparar com cache atual
       const cacheAtual = playlist || [];
@@ -2127,7 +2119,7 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
 
-    const newPlaylist = (itens || []).map(item => ({
+    const newPlaylist = normalizeVideoOnlyPlaylist((itens || []).map(item => ({
       url: item.url,
       tipo: item.tipo || "VÃ­deo",
       duration: item.tipo?.toLowerCase() === "imagem" ? 15000 : null,
@@ -2135,7 +2127,7 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
       focus: item.focus ?? null,
       urlPortrait: item.urlPortrait ?? null,
       urlLandscape: item.urlLandscape ?? null,
-    }));
+    })));
 
     // Comparar com cache atual (respeitando a ordem dos itens)
     const cacheAtual = playlist || [];
@@ -2169,13 +2161,13 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 
   // Detectar se a playlist mudou respeitando tambÃ©m a ordem dos itens
   const playlistAntiga = Array.isArray(playlist) ? playlist : [];
-  const playlistNova = Array.isArray(newPlaylist) ? newPlaylist : [];
+  const playlistNova = normalizeVideoOnlyPlaylist(newPlaylist);
 
   const assinaturaAntiga = buildPlaylistSignature(playlistAntiga);
   const assinaturaNova = buildPlaylistSignature(playlistNova);
   const playlistMudou = assinaturaAntiga !== assinaturaNova;
 
-  playlist = Array.isArray(newPlaylist) ? newPlaylist : [];
+  playlist = playlistNova;
   currentPlaylistId = playlistId ?? null;
   
   // Se a playlist mudou, o Service Worker vai limpar apenas o que nÃ£o estÃ¡ na nova playlist
@@ -2301,7 +2293,18 @@ async function salvarCache(playlistData, codigo) {
   localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
 
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    console.log("ðŸ“¤ Enviando playlist para Service Worker:", playlistData.length, "itens");
+    // IMPORTANTE: Setar namespace ANTES de enviar updateCache
+    // Isso garante que o cache seja verificado no namespace correto
+    // e evita que vídeos já em cache sejam limpos incorretamente
+    navigator.serviceWorker.controller.postMessage({
+      action: "setNamespace",
+      namespace: codigo || "global"
+    });
+    
+    // Aguardar um pouco para garantir que o namespace foi setado
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    console.log("ðŸ"¤ Enviando playlist para Service Worker:", playlistData.length, "itens");
     navigator.serviceWorker.controller.postMessage({
       action: "updateCache",
       playlist: playlistData
@@ -2392,6 +2395,13 @@ async function tocarLoop() {
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
   const isVideo = isVideoItem(item, itemUrl);
+
+  if (!isVideo) {
+    console.warn("[playback] video-only mode: pulando item não-vídeo:", itemUrl);
+    registerItemFailure(itemUrl, "non_video_item");
+    proximoItem();
+    return;
+  }
 
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
