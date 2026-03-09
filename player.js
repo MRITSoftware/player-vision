@@ -23,7 +23,7 @@ const POLLING_MS = 1000; // 1 segundo para resposta instantÃ¢nea
 const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
 const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
-const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
+const ITEM_FAILURES_BEFORE_COOLDOWN = 3;
 let playlist = [];
 let currentIndex = 0;
 let currentPlaylistId = null;
@@ -56,6 +56,8 @@ let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
 let cacheFullyReady = false; // true apenas quando 100% dos itens da playlist estão em cache
+let playbackSuspended = false; // true quando exibição foi parada e login está ativo
+let contentLoadGeneration = 0; // invalida carregamentos assíncronos antigos
 const itemFailureState = new Map();
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
@@ -191,7 +193,8 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
     }
 
     const stalledForMs = Date.now() - lastProgressAt;
-    if (stalledForMs >= 7000) {
+    const stallLimitMs = navigator.onLine ? 9000 : 18000;
+    if (stalledForMs >= stallLimitMs) {
       console.warn("⚠️ Vídeo travado por muito tempo, pulando item:", itemUrl);
       stopPlaybackWatchdog();
       isPlaying = false;
@@ -247,7 +250,7 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     preloadEl.load();
     // Com cache carregado, pré-carregamento é muito mais rápido (vem do IndexedDB)
     // Reduzir timeout para pré-carregamento após primeiro ciclo
-    const preloadTimeout = 2000; // 2s é suficiente quando vem do cache
+    const preloadTimeout = 5000; // vídeos longos podem levar mais para sinalizar canplay
     const ok = await waitForCanPlay(preloadEl, preloadTimeout);
     if (ok) {
       preloadedBufferUrl = nextUrl;
@@ -726,8 +729,9 @@ async function verificarEAtualizarStatusCache() {
     // Verificar cada item da playlist
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
-      const isVideo = /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url);
-      const isImage = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(url);
+      if (!url) continue;
+      const isVideo = isVideoItem(item, url);
+      const isImage = isImageItem(item, url);
       
       if (isVideo) {
         totalVideos++;
@@ -757,6 +761,29 @@ async function verificarEAtualizarStatusCache() {
         } catch (error) {
           console.log(`âš ï¸ Erro ao verificar cache da imagem: ${url}`, error);
           imagensFaltando.push(url);
+        }
+      } else {
+        // Item sem tipo/extensao clara: exige presenca em cache para nao marcar falso "pronto".
+        totalVideos++;
+        const cachedBlob = await findCachedVideoBlob(url, codigoAtual);
+        if (cachedBlob && cachedBlob.size > 0) {
+          videosEmCache++;
+          console.log(`✅ Midia (tipo indefinido) em cache de video: ${url}`);
+          continue;
+        }
+        try {
+          const cache = await caches.open("mrit-player-cache-v13");
+          const cachedResponse = await cache.match(url);
+          if (cachedResponse && cachedResponse.ok) {
+            videosEmCache++;
+            console.log(`✅ Midia (tipo indefinido) em cache do SW: ${url}`);
+          } else {
+            videosFaltando.push(url);
+            console.log(`❌ Midia (tipo indefinido) nao em cache: ${url}`);
+          }
+        } catch (error) {
+          videosFaltando.push(url);
+          console.log(`⚠️ Erro ao verificar midia indefinida no cache: ${url}`, error);
         }
       }
     }
@@ -1503,6 +1530,7 @@ async function iniciar() {
   }
   
   codigoAtual = codigo;
+  playbackSuspended = false;
   
   // Configurar namespace no Service Worker IMEDIATAMENTE para usar cache correto
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -1933,6 +1961,14 @@ async function iniciar() {
 
 async function carregarConteudo(codigoConteudo) {
   try {
+    const loadGeneration = ++contentLoadGeneration;
+    const isStaleLoad = () =>
+      loadGeneration !== contentLoadGeneration ||
+      playbackSuspended ||
+      !codigoAtual;
+
+    if (isStaleLoad()) return;
+
     // Resetar flag de primeiro ciclo ao carregar novo conteúdo
     isFirstCycle = true;
     
@@ -1948,6 +1984,7 @@ async function carregarConteudo(codigoConteudo) {
       try {
         const data = JSON.parse(cacheSalvo);
         if (data.playlist && Array.isArray(data.playlist) && data.playlist.length > 0) {
+          if (isStaleLoad()) return;
           console.log("ðŸ“¦ Cache encontrado! Carregando playlist do cache:", data.playlist.length, "itens");
           
           // Configurar namespace no Service Worker para usar o cache correto
@@ -1975,9 +2012,10 @@ async function carregarConteudo(codigoConteudo) {
           await atualizarPlaylist(playlist, cachedPlaylistId, {
             wasPlaying, currentTime, wasVideo, currentUrl
           });
+          if (isStaleLoad()) return;
           
           // Iniciar reproduÃ§Ã£o imediatamente do cache
-          if (!isPlaying && !isLoadingVideo) {
+          if (!isStaleLoad() && !isPlaying && !isLoadingVideo) {
             tocarLoop();
           }
           
@@ -2006,6 +2044,7 @@ async function carregarConteudo(codigoConteudo) {
       .select("*")
       .eq("codigoAnuncio", codigoConteudo)
       .maybeSingle();
+    if (isStaleLoad()) return;
 
     if (conteudo) {
       const isImageType =
@@ -2029,6 +2068,7 @@ async function carregarConteudo(codigoConteudo) {
       await atualizarPlaylist(newPlaylist, null, {
         wasPlaying, currentTime, wasVideo, currentUrl
       });
+      if (isStaleLoad()) return;
       return;
     }
 
@@ -2038,6 +2078,7 @@ async function carregarConteudo(codigoConteudo) {
       .select("*")
       .eq("codigo_unico", codigoConteudo)
       .maybeSingle();
+    if (isStaleLoad()) return;
 
     if (!playlistData) return;
 
@@ -2046,6 +2087,7 @@ async function carregarConteudo(codigoConteudo) {
       .select("*")
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
+    if (isStaleLoad()) return;
 
     const newPlaylist = (itens || []).map(item => ({
       url: item.url,
@@ -2064,6 +2106,7 @@ async function carregarConteudo(codigoConteudo) {
     await atualizarPlaylist(newPlaylist, codigoConteudo, {
       wasPlaying, currentTime, wasVideo, currentUrl
     });
+    if (isStaleLoad()) return;
   } catch (err) {
     console.error(err);
   }
@@ -2355,6 +2398,16 @@ async function resetAllCachesForNewCode() {
 }
 
 async function tocarLoop() {
+  if (playbackSuspended || !codigoAtual) {
+    await stopNativeVideoPlayback();
+    stopPlaybackWatchdog();
+    for (const v of getUniqueVideoEls()) v.style.display = "none";
+    img.style.display = "none";
+    isPlaying = false;
+    isLoadingVideo = false;
+    return;
+  }
+
   if (!playlist.length) {
     await stopNativeVideoPlayback();
     for (const v of getUniqueVideoEls()) v.style.display = "none";
@@ -2409,7 +2462,7 @@ async function tocarLoop() {
 
     const previousVideo = video;
     const nextVideo = (videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo;
-    const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 15000);
+    const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 30000);
 
     try {
       nextVideo.muted = true;
@@ -2468,14 +2521,9 @@ async function tocarLoop() {
         // Com cache carregado, vídeos carregam muito mais rápido do IndexedDB.
         // Online: dar mais tempo para vídeos longos iniciarem sem marcar falha.
         // Offline: timeout curto para detectar rapidamente itens que não estão em cache.
-        let timeout;
-        if (!navigator.onLine) {
-          timeout = 2000;
-        } else {
-          timeout = isFirstCycle ? 8000 : 5000;
-        }
+        const timeout = getVideoLoadTimeoutMs();
         const ok = await waitForVideoReady(nextVideo, timeout);
-        if (!ok || nextVideo.readyState < 3) {
+        if (!ok || nextVideo.readyState < 2) {
           // Se está offline e não carregou, provavelmente não está em cache
           if (!navigator.onLine) {
             console.warn("⚠️ Vídeo não carregou offline - provavelmente não está em cache:", itemUrl);
@@ -2786,6 +2834,16 @@ function getAdaptiveTimeout(baseTimeout) {
   return baseTimeout;
 }
 
+function getVideoLoadTimeoutMs() {
+  // Offline com blob grande do IDB pode precisar de mais tempo para iniciar.
+  if (!navigator.onLine) {
+    return cacheFullyReady ? 7000 : 12000;
+  }
+  // Enquanto cache ainda aquece, aceitar startup mais lento para não pular item válido.
+  if (isFirstCycle || !cacheFullyReady) return 15000;
+  return 8000;
+}
+
 function waitForCanPlay(videoEl, timeoutMs = 7000) {
   return new Promise(async (resolve) => {
     if (videoEl.readyState >= 3) return resolve(true);
@@ -2801,6 +2859,8 @@ function waitForCanPlay(videoEl, timeoutMs = 7000) {
     }
     
     let done = false;
+    let stalledCheckId = null;
+    const startedAt = Date.now();
     const onCanPlay = () => { if (!done) { done = true; cleanup(); resolve(true); } };
     const onError = () => { 
       if (!done) { 
@@ -2811,19 +2871,20 @@ function waitForCanPlay(videoEl, timeoutMs = 7000) {
       } 
     };
     const onStalled = () => {
-      // Se o vídeo ficar travado por muito tempo sem progresso, considerar como falha
-      // Isso é especialmente importante quando offline e o vídeo não está em cache
-      if (!done && videoEl.readyState < 3) {
-        // Verificar novamente após um delay curto
-        setTimeout(() => {
-          if (!done && videoEl.readyState < 3 && !navigator.onLine) {
-            console.warn("[waitForCanPlay] Vídeo travado e offline, provavelmente não está em cache");
-            done = true;
-            cleanup();
-            resolve(false);
-          }
-        }, 2000);
-      }
+      // Evitar falha precoce: vídeos grandes podem emitir stalled antes de ficar tocáveis.
+      if (done || navigator.onLine || stalledCheckId) return;
+      stalledCheckId = setTimeout(() => {
+        if (done) return;
+        const elapsed = Date.now() - startedAt;
+        const hasBuffered = videoEl.buffered && videoEl.buffered.length > 0;
+        const hasProgress = videoEl.readyState >= 2 || hasBuffered;
+        if (!hasProgress && elapsed >= 7000) {
+          console.warn("[waitForCanPlay] Vídeo sem progresso offline por muito tempo, tratando como cache ausente");
+          done = true;
+          cleanup();
+          resolve(false);
+        }
+      }, 7000);
     };
     
     const t = setTimeout(() => { 
@@ -2839,7 +2900,11 @@ function waitForCanPlay(videoEl, timeoutMs = 7000) {
     }, adaptiveTimeout);
     
     function cleanup() { 
-      clearTimeout(t); 
+      clearTimeout(t);
+      if (stalledCheckId) {
+        clearTimeout(stalledCheckId);
+        stalledCheckId = null;
+      }
       videoEl.removeEventListener("canplay", onCanPlay); 
       videoEl.removeEventListener("error", onError);
       videoEl.removeEventListener("stalled", onStalled);
@@ -3566,6 +3631,8 @@ async function verificarMudancaDispositivo() {
 
 // ===== Cleanup/lock =====
 async function pararTudoMostrarLogin() {
+  playbackSuspended = true;
+  contentLoadGeneration++;
   cacheFullyReady = false;
   // Parar e esconder vÃ­deos (ativo + buffer)
   await stopNativeVideoPlayback();
@@ -3610,6 +3677,33 @@ async function pararTudoMostrarLogin() {
   currentIndex = 0;
   currentItemUrl = null;
   isPlaying = false;
+
+  // Parar loops/background que podem religar mídia após mostrar o login.
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (cacheCheckTimer) {
+    clearInterval(cacheCheckTimer);
+    cacheCheckTimer = null;
+  }
+  if (dispositivosCheckTimer) {
+    clearInterval(dispositivosCheckTimer);
+    dispositivosCheckTimer = null;
+  }
+  if (playlistChannel) {
+    client.removeChannel(playlistChannel);
+    playlistChannel = null;
+  }
+  if (displaysChannel) {
+    client.removeChannel(displaysChannel);
+    displaysChannel = null;
+  }
+  if (dispositivosChannel) {
+    client.removeChannel(dispositivosChannel);
+    dispositivosChannel = null;
+  }
+  realtimeReady = false;
   
   // Limpar promoÃ§Ã£o
   fecharPopupPromocao();
@@ -3797,6 +3891,8 @@ function stopFullscreenMonitoring() {
 }
 
 function mostrarLogin() {
+  playbackSuspended = true;
+
   // Parar monitoramento de fullscreen
   stopFullscreenMonitoring();
   
@@ -4013,13 +4109,18 @@ if ('serviceWorker' in navigator) {
           );
           event.ports[0].postMessage({ valid: isValid });
         } else if (event.data.action === "cacheUpdated") {
-          console.log("📦 Cache atualizado pelo Service Worker");
-          // Verificar se o cache está realmente completo antes de marcar como pronto
-          // Aguardar um pouco para dar tempo do Service Worker terminar de processar
+          console.log("📦 Cache atualizado pelo Service Worker", event.data);
+          if (event.data.complete === false) {
+            cacheFullyReady = false;
+            if (codigoAtual) {
+              atualizarStatusCache(codigoAtual, false).catch(() => {});
+            }
+          }
+          // Verificar localmente antes de marcar como pronto.
           if (codigoAtual) {
             setTimeout(async () => {
               await verificarEAtualizarStatusCache();
-            }, 3000);
+            }, event.data.complete === false ? 800 : 3000);
           }
         }
       });

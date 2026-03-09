@@ -482,13 +482,18 @@ self.addEventListener("message", async (event) => {
 
   if (action === "updateCache") {
     dlog("📥 Recebida playlist para cache:", playlist?.length, "itens");
-    await updateCacheForCurrentNS(playlist);
-    dlog("✅ Cache atualizado para namespace:", CURRENT_NS);
+    const summary = await updateCacheForCurrentNS(playlist);
+    dlog("✅ Cache atualizado para namespace:", CURRENT_NS, summary);
     
     // Notificar o cliente que o cache foi atualizado
     self.clients.matchAll().then(clients => {
       clients.forEach(client => {
-        client.postMessage({ action: "cacheUpdated", namespace: CURRENT_NS });
+        client.postMessage({
+          action: "cacheUpdated",
+          namespace: CURRENT_NS,
+          complete: !!summary?.complete,
+          summary
+        });
       });
       dlog("📤 Notificação enviada para", clients.length, "clientes");
     });
@@ -554,7 +559,9 @@ self.addEventListener("message", async (event) => {
 
 // Atualiza cache para o namespace atual (imagens → Cache API; vídeos → IDB)
 async function updateCacheForCurrentNS(playlist) {
-  if (!playlist?.length) return;
+  if (!playlist?.length) {
+    return { totalTargets: 0, readyCount: 0, failedCount: 0, complete: true };
+  }
 
   // 1) Limpa vídeos do IDB que não pertencem a este playlist (dentro do NS)
   const keys = await idbAllKeys();
@@ -592,7 +599,10 @@ async function updateCacheForCurrentNS(playlist) {
   }));
 
   // 2) Precache sequencial, limitado
-  let cachedCount = 0;
+  let totalTargets = 0;
+  let readyCount = 0;
+  let failedCount = 0;
+  const handledUrls = new Set();
 
   for (const item of playlist) {
     if (!item) continue;
@@ -608,41 +618,60 @@ async function updateCacheForCurrentNS(playlist) {
 
     for (const url of urlsToCache) {
       if (!url) continue;
+      if (handledUrls.has(url)) continue;
+      handledUrls.add(url);
 
-    const u = new URL(url);
-    const isStorage = isSupabaseStorageURL(u);
+      let parsedUrl = null;
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        failedCount++;
+        dlog("URL inválida no precache:", url);
+        continue;
+      }
 
-    try {
+      try {
       if (/\.m3u8(\?|$)/i.test(url)) {
+        totalTargets++;
         const r = await netFetch(url, { cache: "no-store" }, 5000);
         if (r && r.ok) {
           const cache = await caches.open(CACHE_NAME);
           await cache.put(url, r.clone());
           prefetchFromManifest(url, await r.clone().text()).catch(()=>{});
+          readyCount++;
+        } else {
+          failedCount++;
         }
         continue;
       }
 
       if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(url)) {
+        totalTargets++;
         // Verificar se já existe no cache antes de baixar
         const cached = await cache.match(url);
         if (cached) {
           dlog("imagem já em cache, pulando:", url);
+          readyCount++;
           continue;
         }
         
         const resp = await netFetch(url, { cache: "no-store" }, 5000);
         if (resp.ok) {
           await cache.put(url, resp.clone());
+          readyCount++;
+        } else {
+          failedCount++;
         }
         continue;
       }
 
       if (/\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv)(\?|$)/i.test(url)) {
+        totalTargets++;
         // Verificar se já existe no cache
         const existingBlob = await idbGet(nsKey(url));
-        if (existingBlob) {
+        if (existingBlob && existingBlob.size > 0) {
           dlog("vídeo já em cache, pulando:", url);
+          readyCount++;
           continue;
         }
         
@@ -657,6 +686,7 @@ async function updateCacheForCurrentNS(playlist) {
         let retryCount = 0;
         const maxRetries = 3;
         let success = false;
+        let videoFailed = false;
         
         while (!success && retryCount <= maxRetries) {
           try {
@@ -666,7 +696,7 @@ async function updateCacheForCurrentNS(playlist) {
               await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
             }
             
-            const headResp = await netFetch(url, { method: "GET", cache: "no-store" }, 120000);
+            const headResp = await netFetch(parsedUrl, { method: "GET", cache: "no-store" }, 120000);
             if (!headResp.ok) {
               dlog("falha ao baixar vídeo:", url, "status:", headResp.status);
               retryCount++;
@@ -682,29 +712,38 @@ async function updateCacheForCurrentNS(playlist) {
             
             if (blob.size > MAX_VIDEO_BYTES) {
               dlog("pulado (arquivo grande)", url, blob.size, "limite:", MAX_VIDEO_BYTES);
+              videoFailed = true;
               break; // Não retry para arquivos grandes
             }
             
             dlog("vídeo em cache:", url, "tamanho:", blob.size, "MB:", (blob.size / 1024 / 1024).toFixed(2));
             await idbSet(nsKey(url), blob);
-            cachedCount++;
+            readyCount++;
             success = true;
           } catch (err) {
             retryCount++;
             if (retryCount > maxRetries) {
               // Não travar se falhar após todas as tentativas - apenas logar e continuar
               dlog("erro ao baixar vídeo após", maxRetries + 1, "tentativas (continuando):", url, err?.message);
+              videoFailed = true;
             } else {
               dlog("erro ao baixar vídeo (tentativa", retryCount, "de", maxRetries + 1, "):", url, err?.message);
             }
           }
         }
+        if (!success && videoFailed) {
+          failedCount++;
+        }
       }
     } catch (err) {
       dlog("precache falhou →", url, err?.message);
+      failedCount++;
     }
   }
 }
+
+  const complete = totalTargets === 0 ? true : (readyCount === totalTargets && failedCount === 0);
+  return { totalTargets, readyCount, failedCount, complete };
 }
 
 
