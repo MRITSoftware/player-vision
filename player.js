@@ -899,8 +899,17 @@ function applyFit(el, fit = "cover", pos = "center center") {
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
 function pickSourceForOrientation(item) {
-  if (FORCE_PORTRAIT_CONTENT && item.urlPortrait)  return item.urlPortrait;
-  if (ORIENTATION === "portrait" && item.urlPortrait)  return item.urlPortrait;
+  const tipo = (item?.tipo || "").toLowerCase();
+  const baseUrl = (item?.url || "").toLowerCase();
+  const portraitUrl = (item?.urlPortrait || "").toLowerCase();
+  const landscapeUrl = (item?.urlLandscape || "").toLowerCase();
+  const isVideoLike = tipo.includes("video") ||
+    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv|m3u8)(\?|$)/i.test(baseUrl) ||
+    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv|m3u8)(\?|$)/i.test(portraitUrl) ||
+    /\.(mp4|webm|mkv|mov|avi|m4v|3gp|flv|wmv|m3u8)(\?|$)/i.test(landscapeUrl);
+
+  if (FORCE_PORTRAIT_CONTENT && isVideoLike && item.urlPortrait) return item.urlPortrait;
+  if (ORIENTATION === "portrait" && item.urlPortrait) return item.urlPortrait;
   if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
   return item.url;
 }
@@ -5550,3 +5559,4 @@ window.mritDebug = {
     }
   }
 };
+

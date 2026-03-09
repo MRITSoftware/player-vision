@@ -124,8 +124,7 @@
 
     /* Quando o dispositivo estiver em landscape, "vira" o player para ocupar a tela como se fosse vertical.
        Isso prioriza preencher a altura, aceitando corte em cima/baixo em vez de barras laterais enormes. */
-    html[data-orientation="landscape"] video,
-    html[data-orientation="landscape"] img {
+    html[data-orientation="landscape"] video {
       /* Tela fisica horizontal: girar o conteudo para manter exibicao vertical. */
       inset: auto;
       top: 50%;
