@@ -1,4 +1,4 @@
-﻿// player.js
+// player.js
 // -------------------------------------------------------
 // MRIT Player â€“ vÃ­deo com CORS/Range-friendly + cache por tela
 // - cache por cÃ³digo de tela (namespaced)
@@ -4177,11 +4177,10 @@ window.addEventListener("beforeunload", () => {
     return;
   }
 
-  // Se nÃ£o Ã© restart, limpar normalmente
-  console.log("ðŸšª Fechando app - limpando dados");
-  
-  // limpa cache do namespace desta tela
-  navigator.serviceWorker.controller?.postMessage({ action: "clearNamespace" });
+  // App fechando - NÃƒO limpar cache nem localStorage!
+  // Ao reiniciar o dispositivo, beforeunload dispara e apagava tudo.
+  // Cache e cÃ³digo devem PERSISTIR para reconexÃ£o rÃ¡pida ao reabrir.
+  console.log("ðŸšª Fechando app - mantendo cache e cÃ³digo para reconexÃ£o");
 
   const url = `${supabaseUrl}/rest/v1/displays?codigo_unico=eq.${encodeURIComponent(codigoAtual)}&apikey=${encodeURIComponent(supabaseKey)}`;
   const payload = JSON.stringify({ is_locked: false, status: "DisponÃ­vel" });
@@ -4198,10 +4197,6 @@ window.addEventListener("beforeunload", () => {
   } catch (err) {
     // Ignorar erros no beforeunload
   }
-  
-  // Limpar localStorage quando fechar (jÃ¡ que is_locked = false)
-  localStorage.removeItem(CODIGO_DISPLAY_KEY);
-  localStorage.removeItem(LOCAL_TELA_KEY);
 });
 
 // ===== Debug Helper =====

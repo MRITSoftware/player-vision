@@ -12,8 +12,8 @@
 
 2. **Cache de Vídeos**
    - ✅ Salvo em **IndexedDB** (persistente)
-   - ✅ **NÃO é limpo** ao fechar app
-   - ✅ **NÃO é limpo** ao reiniciar
+   - ✅ **NÃO é limpo** ao fechar app (corrigido: beforeunload não limpa mais)
+   - ✅ **NÃO é limpo** ao reiniciar dispositivo
    - ✅ **NÃO é limpo** ao limpar cache do navegador
    - ✅ Só é limpo se:
      - Desinstalar o app

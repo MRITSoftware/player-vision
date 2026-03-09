@@ -234,15 +234,29 @@
       setTimeout(entrarFullscreen, 100);
     });
 
-    // Botão iniciar
-    document.getElementById("btnEntrar").addEventListener("click", () => {
-      if (typeof startPlayer === 'function') {
+    // Botão iniciar - sempre dar feedback (erro se player não carregou ou código vazio)
+    function onIniciarClick() {
+      try {
+        if (typeof startPlayer !== 'function') {
+          console.error('startPlayer não está definido - player.js pode não ter carregado.');
+          alert('Player não carregou. Verifique a conexão e recarregue a página.');
+          return;
+        }
         startPlayer();
         // Forçar fullscreen após iniciar
         setTimeout(entrarFullscreen, 100);
         setTimeout(entrarFullscreen, 500);
+      } catch (err) {
+        console.error('Erro ao iniciar:', err);
+        alert('Erro ao iniciar: ' + (err && err.message ? err.message : String(err)));
       }
-    });
+    }
+    const btnEntrar = document.getElementById("btnEntrar");
+    if (btnEntrar) {
+      btnEntrar.addEventListener("click", onIniciarClick);
+    } else {
+      console.error('Botão btnEntrar não encontrado no DOM.');
+    }
     
     // SEMPRE forçar fullscreen quando app carregar (APK/PWA)
     window.addEventListener('load', () => {
