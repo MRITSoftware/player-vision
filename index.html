@@ -126,9 +126,15 @@
        Isso prioriza preencher a altura, aceitando corte em cima/baixo em vez de barras laterais enormes. */
     html[data-orientation="landscape"] video,
     html[data-orientation="landscape"] img {
-      /* A tela física é 16:9, o conteúdo é 9:16.
-         Giramos 90deg e aplicamos um pequeno scale para preencher bem. */
-      transform: translateZ(0);
+      /* Tela fisica horizontal: girar o conteudo para manter exibicao vertical. */
+      inset: auto;
+      top: 50%;
+      left: 50%;
+      width: calc(100dvh + 2px);
+      height: calc(100dvw + 2px);
+      width: calc(100vh + 2px);   /* fallback */
+      height: calc(100vw + 2px);  /* fallback */
+      transform: translate(-50%, -50%) rotate(90deg);
     }
     
     /* Elemento oculto mas pronto para exibir */

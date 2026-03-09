@@ -14,7 +14,7 @@ const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
 const POLLING_MS = 1000;
-const FORCE_PORTRAIT_LAYOUT = true; // Mantem o layout logico em vertical
+const FORCE_PORTRAIT_CONTENT = true; // Sempre prioriza conteudo retrato (urlPortrait)
 
 // ===== ConfiguraÃ§Ãµes de Buffering =====
 // Modos disponÃ­veis:
@@ -860,7 +860,6 @@ async function verificarEAtualizarStatusCache() {
 // Detecta orientação real da tela e permite ajustes de layout
 let ORIENTATION = "portrait";
 function detectOrientation() {
-  if (FORCE_PORTRAIT_LAYOUT) return "portrait";
   try {
     const w = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0;
     const h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
@@ -871,11 +870,6 @@ function detectOrientation() {
   }
 }
 function applyOrientation(o) {
-  if (FORCE_PORTRAIT_LAYOUT) {
-    ORIENTATION = "portrait";
-    document.documentElement.dataset.orientation = "portrait";
-    return;
-  }
   ORIENTATION = o === "landscape" ? "landscape" : "portrait";
   document.documentElement.dataset.orientation = ORIENTATION;
 }
@@ -905,7 +899,7 @@ function applyFit(el, fit = "cover", pos = "center center") {
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
 function pickSourceForOrientation(item) {
-  if (FORCE_PORTRAIT_LAYOUT && item.urlPortrait)  return item.urlPortrait;
+  if (FORCE_PORTRAIT_CONTENT && item.urlPortrait)  return item.urlPortrait;
   if (ORIENTATION === "portrait" && item.urlPortrait)  return item.urlPortrait;
   if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
   return item.url;
@@ -2378,13 +2372,14 @@ async function salvarCache(playlistData, codigo) {
   localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
 
   console.log("[cache] Enviando playlist para Service Worker:", playlistData.length, "itens");
-  const sent = await postMessageToServiceWorker({
+  postMessageToServiceWorker({
     action: "updateCache",
     playlist: playlistData
-  }, true);
-  if (!sent) {
-    console.warn("[cache] Service Worker nao disponivel para cache automatico");
-  }
+  }, false).then((sent) => {
+    if (!sent) {
+      console.warn("[cache] Service Worker nao disponivel para cache automatico");
+    }
+  }).catch(() => {});
 
   // Nao marcar cache como pronto aqui.
   // O status e atualizado apenas por verificarEAtualizarStatusCache(),
