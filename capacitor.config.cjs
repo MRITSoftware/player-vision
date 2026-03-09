@@ -18,7 +18,8 @@ module.exports = {
       launchAutoHide: true,
       backgroundColor: "#000000",
       androidSplashResourceName: "splash",
-      androidScaleType: "CENTER",
+      // Usa CENTER_CROP para preencher a tela sem distorcer (corta só excesso)
+      androidScaleType: "CENTER_CROP",
       showSpinner: false,
       splashFullScreen: true,
       splashImmersive: true,
