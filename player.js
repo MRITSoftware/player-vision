@@ -13,7 +13,8 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsIm
 const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
-const POLLING_MS = 1000; // 1 segundo para resposta instantÃ¢nea
+const POLLING_MS = 1000;
+const FORCE_PORTRAIT_LAYOUT = true; // Mantem o layout logico em vertical
 
 // ===== ConfiguraÃ§Ãµes de Buffering =====
 // Modos disponÃ­veis:
@@ -668,6 +669,28 @@ function clearVideoElementSource(videoEl) {
   videoEl.removeAttribute("src");
 }
 
+async function postMessageToServiceWorker(message, waitForReady = true) {
+  if (!("serviceWorker" in navigator)) return false;
+
+  try {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage(message);
+      return true;
+    }
+    if (!waitForReady) return false;
+
+    const registration = await navigator.serviceWorker.ready;
+    const target = registration?.active || navigator.serviceWorker.controller;
+    if (!target) return false;
+
+    target.postMessage(message);
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Falha ao enviar mensagem para Service Worker:", message?.action, err);
+    return false;
+  }
+}
+
 // ===== Cache helpers (namespaced por cÃ³digo) =====
 function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
@@ -837,6 +860,7 @@ async function verificarEAtualizarStatusCache() {
 // Detecta orientação real da tela e permite ajustes de layout
 let ORIENTATION = "portrait";
 function detectOrientation() {
+  if (FORCE_PORTRAIT_LAYOUT) return "portrait";
   try {
     const w = window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0;
     const h = window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0;
@@ -847,6 +871,11 @@ function detectOrientation() {
   }
 }
 function applyOrientation(o) {
+  if (FORCE_PORTRAIT_LAYOUT) {
+    ORIENTATION = "portrait";
+    document.documentElement.dataset.orientation = "portrait";
+    return;
+  }
   ORIENTATION = o === "landscape" ? "landscape" : "portrait";
   document.documentElement.dataset.orientation = ORIENTATION;
 }
@@ -876,6 +905,7 @@ function applyFit(el, fit = "cover", pos = "center center") {
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
 function pickSourceForOrientation(item) {
+  if (FORCE_PORTRAIT_LAYOUT && item.urlPortrait)  return item.urlPortrait;
   if (ORIENTATION === "portrait" && item.urlPortrait)  return item.urlPortrait;
   if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
   return item.url;
@@ -2344,22 +2374,21 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 }
 
 async function salvarCache(playlistData, codigo) {
-  // cache namespaced por cÃ³digo
+  // cache namespaced por codigo
   localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
 
-  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    console.log("ðŸ“¤ Enviando playlist para Service Worker:", playlistData.length, "itens");
-    navigator.serviceWorker.controller.postMessage({
-      action: "updateCache",
-      playlist: playlistData
-    });
-  } else {
-    console.warn("âš ï¸ Service Worker nÃ£o disponÃ­vel para cache automÃ¡tico");
+  console.log("[cache] Enviando playlist para Service Worker:", playlistData.length, "itens");
+  const sent = await postMessageToServiceWorker({
+    action: "updateCache",
+    playlist: playlistData
+  }, true);
+  if (!sent) {
+    console.warn("[cache] Service Worker nao disponivel para cache automatico");
   }
 
-  // NÃƒO marcar cache como pronto aqui.
-  // O status Ã© atualizado apenas por verificarEAtualizarStatusCache(),
-  // depois de confirmar que todos os arquivos realmente estÃ£o em cache.
+  // Nao marcar cache como pronto aqui.
+  // O status e atualizado apenas por verificarEAtualizarStatusCache(),
+  // depois de confirmar que todos os arquivos realmente estao em cache.
 }
 
 // Reset agressivo quando entra com um novo cÃ³digo
@@ -4278,12 +4307,14 @@ window.addEventListener("online", () => {
       console.log("🔄 Retomando verificação de cache após internet voltar...");
       
       // Notificar o Service Worker para retomar downloads
-      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({
-          action: "updateCache",
-          playlist: playlist
-        });
-        console.log("📤 Notificação enviada ao Service Worker para retomar cache");
+      const sent = await postMessageToServiceWorker({
+        action: "updateCache",
+        playlist: playlist
+      }, true);
+      if (sent) {
+        console.log("[cache] Notificacao enviada ao Service Worker para retomar cache");
+      } else {
+        console.warn("[cache] Falha ao notificar Service Worker para retomar cache");
       }
       
       // Aguardar um pouco para garantir que a conexão está estável
@@ -5524,8 +5555,3 @@ window.mritDebug = {
     }
   }
 };
-
-
-
-
-
