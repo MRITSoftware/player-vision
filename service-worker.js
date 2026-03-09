@@ -23,7 +23,9 @@ let OFFLINE_TEST = false;
 let CURRENT_NS = "global"; // namespace da tela (ex.: CÓDIGO)
 
 // Limites de cache (simples e efetivos)
-const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por vídeo (aumentado para suportar vídeos maiores)
+const MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024; // 5GB por video
+const VIDEO_FETCH_TIMEOUT_MS = 180000; // 3 minutos por video (evita bloquear toda a fila)
+const VIDEO_FETCH_MAX_RETRIES = 2; // total de 3 tentativas por video
 
 function dlog(...args) { 
   // Sempre logar cache hits/misses e erros para debug offline
@@ -41,6 +43,8 @@ function dlog(...args) {
   }
 }
 const nsKey = (url) => `${CURRENT_NS}::${url}`;
+const nsKeyFor = (ns, url) => `${ns}::${url}`;
+let cacheUpdateChain = Promise.resolve();
 
 // ===== IndexedDB Helpers =====
 function idbOpen() {
@@ -481,22 +485,36 @@ self.addEventListener("message", async (event) => {
   }
 
   if (action === "updateCache") {
-    dlog("📥 Recebida playlist para cache:", playlist?.length, "itens");
-    const summary = await updateCacheForCurrentNS(playlist);
-    dlog("✅ Cache atualizado para namespace:", CURRENT_NS, summary);
-    
-    // Notificar o cliente que o cache foi atualizado
-    self.clients.matchAll().then(clients => {
+    const targetNs = CURRENT_NS;
+    cacheUpdateChain = cacheUpdateChain.then(async () => {
+      dlog("Recebida playlist para cache:", playlist?.length, "itens", "ns:", targetNs);
+      const summary = await updateCacheForNamespace(targetNs, playlist);
+      dlog("Cache atualizado para namespace:", targetNs, summary);
+
+      const clients = await self.clients.matchAll();
       clients.forEach(client => {
         client.postMessage({
           action: "cacheUpdated",
-          namespace: CURRENT_NS,
+          namespace: targetNs,
           complete: !!summary?.complete,
           summary
         });
       });
-      dlog("📤 Notificação enviada para", clients.length, "clientes");
+      dlog("Notificacao enviada para", clients.length, "clientes");
+    }, async () => {
+      dlog("Fila de cache estava em erro, retomando no namespace:", targetNs);
+      const summary = await updateCacheForNamespace(targetNs, playlist);
+      const clients = await self.clients.matchAll();
+      clients.forEach(client => {
+        client.postMessage({
+          action: "cacheUpdated",
+          namespace: targetNs,
+          complete: !!summary?.complete,
+          summary
+        });
+      });
     });
+    event.waitUntil(cacheUpdateChain);
     return;
   }
 
@@ -504,7 +522,7 @@ self.addEventListener("message", async (event) => {
     await idbClearNamespace(CURRENT_NS);
     const cache = await caches.open(CACHE_NAME);
     const keys = await cache.keys();
-    // Limpa imagens/HLS ligados ao domínio do Storage (opcional)
+    // Limpa imagens/HLS ligados ao dominio do Storage (opcional)
     for (const req of keys) {
       const u = new URL(req.url);
       if (isSupabaseStorageURL(u)) await cache.delete(req);
@@ -531,15 +549,17 @@ self.addEventListener("message", async (event) => {
   }
 
   if (action === "forceCache") {
-    dlog("forçando cache para playlist:", playlist);
-    await updateCacheForCurrentNS(playlist);
+    const targetNs = CURRENT_NS;
+    dlog("Forcando cache para playlist no ns:", targetNs);
+    cacheUpdateChain = cacheUpdateChain.then(() => updateCacheForNamespace(targetNs, playlist));
+    event.waitUntil(cacheUpdateChain);
     return;
   }
 
   if (action === "checkCache") {
     const url = event.data.url;
     if (!url) return;
-    
+
     const key = nsKey(url);
     const blob = await idbGet(key);
     const result = {
@@ -548,7 +568,7 @@ self.addEventListener("message", async (event) => {
       size: blob ? blob.size : 0,
       key: key
     };
-    
+
     // Enviar resposta de volta para o cliente
     if (event.ports && event.ports[0]) {
       event.ports[0].postMessage(result);
@@ -558,7 +578,7 @@ self.addEventListener("message", async (event) => {
 });
 
 // Atualiza cache para o namespace atual (imagens → Cache API; vídeos → IDB)
-async function updateCacheForCurrentNS(playlist) {
+async function updateCacheForNamespace(namespace, playlist) {
   if (!playlist?.length) {
     return { totalTargets: 0, readyCount: 0, failedCount: 0, complete: true };
   }
@@ -578,7 +598,7 @@ async function updateCacheForCurrentNS(playlist) {
     if (landscape) keepUrls.add(landscape);
   }
 
-  const prefix = `${CURRENT_NS}::`;
+  const prefix = `${namespace}::`;
   await Promise.all(keys.map(k => {
     const ks = String(k);
     if (!ks.startsWith(prefix)) return null;
@@ -677,7 +697,7 @@ async function updateCacheForCurrentNS(playlist) {
       if (isVideo) {
         totalTargets++;
         // Verificar se já existe no cache
-        const existingBlob = await idbGet(nsKey(url));
+        const existingBlob = await idbGet(nsKeyFor(namespace, url));
         if (existingBlob && existingBlob.size > 0) {
           dlog("vídeo já em cache, pulando:", url);
           readyCount++;
@@ -693,7 +713,7 @@ async function updateCacheForCurrentNS(playlist) {
         // Isso evita que trave quando a internet está lenta
         // Adicionar retry automático para casos de queda de internet
         let retryCount = 0;
-        const maxRetries = 3;
+        const maxRetries = VIDEO_FETCH_MAX_RETRIES;
         let success = false;
         let videoFailed = false;
         
@@ -705,7 +725,7 @@ async function updateCacheForCurrentNS(playlist) {
               await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
             }
             
-            const headResp = await netFetch(parsedUrl, { method: "GET", cache: "no-store" }, 1800000);
+            const headResp = await netFetch(parsedUrl, { method: "GET", cache: "no-store" }, VIDEO_FETCH_TIMEOUT_MS);
             if (!headResp.ok) {
               dlog("falha ao baixar vídeo:", url, "status:", headResp.status);
               retryCount++;
@@ -726,7 +746,7 @@ async function updateCacheForCurrentNS(playlist) {
             }
             
             dlog("vídeo em cache:", url, "tamanho:", blob.size, "MB:", (blob.size / 1024 / 1024).toFixed(2));
-            await idbSet(nsKey(url), blob);
+            await idbSet(nsKeyFor(namespace, url), blob);
             readyCount++;
             success = true;
           } catch (err) {

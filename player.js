@@ -4134,10 +4134,62 @@ if ('serviceWorker' in navigator) {
 
 // ===== UI Events / Heartbeat / Unlock =====
 
+async function sendHeartbeatNow(reason = "unknown") {
+  if (!codigoAtual || !navigator.onLine) return false;
+  const nowIso = new Date().toISOString();
+  const updateData = {
+    status_tela: "Online",
+    last_ping: nowIso
+  };
+
+  try {
+    const deviceId = gerarDeviceId();
+    updateData.device_id = deviceId;
+    updateData.device_last_seen = nowIso;
+  } catch {
+    // device_id opcional
+  }
+
+  try {
+    const { error } = await client
+      .from("displays")
+      .update(updateData)
+      .eq("codigo_unico", codigoAtual);
+
+    if (error) throw error;
+    console.log(`[heartbeat] enviado (${reason}) para ${codigoAtual} em ${nowIso}`);
+    return true;
+  } catch (err) {
+    // Fallback para schemas antigos sem colunas opcionais
+    if (err.message && err.message.includes("column") && err.message.includes("does not exist")) {
+      try {
+        const { error: fallbackError } = await client
+          .from("displays")
+          .update({
+            status_tela: "Online",
+            last_ping: nowIso
+          })
+          .eq("codigo_unico", codigoAtual);
+        if (fallbackError) throw fallbackError;
+        console.log(`[heartbeat] enviado fallback (${reason}) para ${codigoAtual} em ${nowIso}`);
+        return true;
+      } catch (fallbackErr) {
+        console.warn("[heartbeat] falha no fallback:", fallbackErr?.message || fallbackErr);
+      }
+    } else {
+      console.warn("[heartbeat] falha ao enviar:", err?.message || err);
+    }
+  }
+
+  return false;
+}
 // Debounce do evento online
 window.addEventListener("online", () => {
   if (onlineDebounceId) clearTimeout(onlineDebounceId);
   onlineDebounceId = setTimeout(async () => {
+    if (codigoAtual) {
+      await sendHeartbeatNow("online_event");
+    }
     if (codigoAtual) {
       try {
         const deviceId = gerarDeviceId();
@@ -4244,40 +4296,7 @@ window.addEventListener("online", () => {
 
 setInterval(async () => {
   if (codigoAtual && navigator.onLine) {
-    try {
-      // AtualizaÃ§Ã£o bÃ¡sica (sempre funciona)
-      const updateData = { 
-        status_tela: "Online", 
-        last_ping: new Date().toISOString()
-      };
-      
-      // Tentar adicionar campos de dispositivo (opcional)
-      try {
-        const deviceId = gerarDeviceId();
-        updateData.device_id = deviceId;
-        updateData.device_last_seen = new Date().toISOString();
-      } catch {
-        // Ignorar se device_id nÃ£o puder ser gerado
-      }
-      
-      await client
-        .from("displays")
-        .update(updateData)
-        .eq("codigo_unico", codigoAtual);
-    } catch (err) {
-      // Se erro for de coluna nÃ£o encontrada, fazer update sem campos opcionais
-      if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
-        try {
-          await client
-            .from("displays")
-            .update({ 
-              status_tela: "Online", 
-              last_ping: new Date().toISOString()
-            })
-            .eq("codigo_unico", codigoAtual);
-        } catch {}
-      }
-    }
+    await sendHeartbeatNow("interval_5min");
   }
 }, 5 * 60 * 1000);
 
@@ -5064,7 +5083,7 @@ window.mritDebug = {
     let cachedCount = 0;
     let failedCount = 0;
     const maxSize = 5 * 1024 * 1024 * 1024; // 5GB (alinhado com Service Worker MAX_VIDEO_BYTES)
-    const maxRetries = 5;
+    const maxRetries = 2; // total de 3 tentativas por video
     
     for (const item of playlist) {
       const url = pickSourceForOrientation(item);
@@ -5101,7 +5120,7 @@ window.mritDebug = {
           
           // Baixar vÃ­deo com timeout maior
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 1800000); // 30 minutos para suportar arquivos grandes
+          const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minutos por video
           
           const response = await fetch(url, { 
             method: 'GET',
@@ -5505,5 +5524,8 @@ window.mritDebug = {
     }
   }
 };
+
+
+
 
 
