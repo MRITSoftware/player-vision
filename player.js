@@ -2293,17 +2293,6 @@ async function salvarCache(playlistData, codigo) {
   localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
 
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    // IMPORTANTE: Setar namespace ANTES de enviar updateCache
-    // Isso garante que o cache seja verificado no namespace correto
-    // e evita que vídeos já em cache sejam limpos incorretamente
-    navigator.serviceWorker.controller.postMessage({
-      action: "setNamespace",
-      namespace: codigo || "global"
-    });
-    
-    // Aguardar um pouco para garantir que o namespace foi setado
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
     console.log("ðŸ"¤ Enviando playlist para Service Worker:", playlistData.length, "itens");
     navigator.serviceWorker.controller.postMessage({
       action: "updateCache",
