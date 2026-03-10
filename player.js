@@ -67,6 +67,7 @@ const itemFailureState = new Map();
 let nativeExoListenerHandle = null;
 let nativeExoPendingToken = null;
 let nativeExoPendingUrl = null;
+const activeObjectUrls = new Set();
 // ===== VariÃ¡veis de promoÃ§Ã£o =====
 let promoData = null;
 let promoCounter = null;
@@ -819,6 +820,101 @@ async function idbAllKeys() {
     r.onsuccess = () => resolve(r.result || []);
     r.onerror = () => reject(r.error);
   });
+}
+
+function trackObjectUrl(url) {
+  if (url && typeof url === "string" && url.startsWith("blob:")) {
+    activeObjectUrls.add(url);
+  }
+  return url;
+}
+
+function revokeTrackedObjectUrl(url) {
+  if (!url || !activeObjectUrls.has(url)) return;
+  try {
+    URL.revokeObjectURL(url);
+  } catch {}
+  activeObjectUrls.delete(url);
+}
+
+function revokeElementObjectUrl(el) {
+  if (!el) return;
+  const objectUrl = el.dataset?.mritObjectUrl;
+  if (!objectUrl) return;
+  revokeTrackedObjectUrl(objectUrl);
+  delete el.dataset.mritObjectUrl;
+}
+
+function setMediaElementSource(el, src) {
+  if (!el) return;
+  revokeElementObjectUrl(el);
+  el.src = src;
+  if (typeof src === "string" && src.startsWith("blob:")) {
+    el.dataset.mritObjectUrl = src;
+    trackObjectUrl(src);
+  }
+}
+
+function buildCacheLookupCandidates(url) {
+  if (!url) return [];
+  const candidates = [String(url)];
+  try {
+    const parsed = new URL(url);
+    const withoutQuery = `${parsed.origin}${parsed.pathname}`;
+    if (withoutQuery !== url) candidates.push(withoutQuery);
+  } catch {}
+  return [...new Set(candidates)];
+}
+
+async function findCachedVideoBlobLocal(url) {
+  const candidates = buildCacheLookupCandidates(url);
+  if (!candidates.length) return null;
+
+  for (const candidate of candidates) {
+    const exactBlob = await idbGet(`${codigoAtual}::${candidate}`);
+    if (exactBlob && exactBlob.size > 0) return exactBlob;
+  }
+
+  const keys = await idbAllKeys();
+  for (const rawKey of keys) {
+    const key = String(rawKey);
+    if (!candidates.some((candidate) => key.endsWith(`::${candidate}`))) continue;
+    const blob = await idbGet(key);
+    if (blob && blob.size > 0) return blob;
+  }
+
+  return null;
+}
+
+async function findCachedImageBlobLocal(url) {
+  const candidates = buildCacheLookupCandidates(url);
+  if (!candidates.length) return null;
+
+  const cache = await caches.open("mrit-player-cache-v13");
+  for (const candidate of candidates) {
+    const cachedResponse = await cache.match(candidate);
+    if (!cachedResponse || !cachedResponse.ok) continue;
+    const blob = await cachedResponse.blob();
+    if (blob && blob.size > 0) return blob;
+  }
+
+  return null;
+}
+
+async function getPlayableCachedSource(url, mediaType) {
+  if (!codigoAtual || !url) return null;
+
+  try {
+    const blob = mediaType === "video"
+      ? await findCachedVideoBlobLocal(url)
+      : await findCachedImageBlobLocal(url);
+
+    if (!blob || blob.size <= 0) return null;
+    return trackObjectUrl(URL.createObjectURL(blob));
+  } catch (err) {
+    console.warn("⚠️ Erro ao montar source local do cache:", mediaType, url, err?.message || err);
+    return null;
+  }
 }
 
 // ===== Cache helpers (namespaced por cÃ³digo) =====
@@ -2431,6 +2527,7 @@ async function resetAllCachesForNewCode() {
   // zera os elementos de mÃ­dia (ativo + buffer)
   for (const v of getUniqueVideoEls()) {
     try { v.pause(); } catch {}
+    revokeElementObjectUrl(v);
     v.removeAttribute("src");
     v.load();
   }
@@ -2445,6 +2542,7 @@ async function resetAllCachesForNewCode() {
   playToken++;
   currentVideoToken++;
   img.src = "";
+  revokeElementObjectUrl(img);
   
   // Marcar cache como nÃ£o pronto ao trocar de cÃ³digo
   if (codigoAtual) {
@@ -2504,6 +2602,7 @@ async function tocarLoop() {
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
   const isVideo = isVideoItem(item, itemUrl);
+  const preferLocalCachePlayback = !navigator.onLine || !navigator.serviceWorker.controller;
 
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
@@ -2532,19 +2631,31 @@ async function tocarLoop() {
     const previousVideo = video;
     const nextVideo = (videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo;
     const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 15000);
+    let playbackUrl = itemUrl;
 
     try {
       nextVideo.muted = true;
       nextVideo.playsInline = true;
       nextVideo.setAttribute("crossorigin", "anonymous");
       nextVideo.preload = "auto";
+      revokeElementObjectUrl(nextVideo);
+
+      if (!isHls && preferLocalCachePlayback) {
+        const cachedPlaybackUrl = await getPlayableCachedSource(itemUrl, "video");
+        if (cachedPlaybackUrl) {
+          playbackUrl = cachedPlaybackUrl;
+          console.log("📦 Reproduzindo vídeo direto do cache local:", itemUrl);
+        } else if (!navigator.onLine) {
+          throw new Error("video offline sem cache local");
+        }
+      }
 
       if (!isHls && preloadedBufferUrl === itemUrl && nextVideo.readyState >= 2) {
         // Buffer já aquecido: troca praticamente instantânea.
       } else if (isHls) {
         destroyHls();
         if (nextVideo.canPlayType("application/vnd.apple.mpegurl")) {
-          nextVideo.src = itemUrl;
+          setMediaElementSource(nextVideo, itemUrl);
           nextVideo.load();
           const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls nativo nao pronto");
@@ -2573,13 +2684,13 @@ async function tocarLoop() {
             });
           });
         } else {
-          nextVideo.src = itemUrl;
+          setMediaElementSource(nextVideo, itemUrl);
           nextVideo.load();
           const ok = await waitForVideoReady(nextVideo, 6000);
           if (!ok) throw new Error("hls fallback nao pronto");
         }
       } else {
-        nextVideo.src = itemUrl;
+        setMediaElementSource(nextVideo, playbackUrl);
         nextVideo.load();
         const ok = await waitForVideoReady(nextVideo, 6000);
         if (!ok || nextVideo.readyState < 3) throw new Error("video nao pronto");
@@ -2630,6 +2741,7 @@ async function tocarLoop() {
           previousVideo.classList.remove("hidden-ready");
           try {
             previousVideo.pause();
+            revokeElementObjectUrl(previousVideo);
             previousVideo.removeAttribute("src");
             previousVideo.load();
           } catch {}
@@ -2777,6 +2889,7 @@ async function tocarLoop() {
       try {
         v.pause();
         v.currentTime = 0;
+        revokeElementObjectUrl(v);
         v.removeAttribute("src");
         v.load();
       } catch {}
@@ -2812,7 +2925,19 @@ async function tocarLoop() {
     proximoItem();
   };
 
-  img.src = itemUrl;
+  let imagePlaybackUrl = itemUrl;
+  if (preferLocalCachePlayback) {
+    const cachedImageUrl = await getPlayableCachedSource(itemUrl, "image");
+    if (cachedImageUrl) {
+      imagePlaybackUrl = cachedImageUrl;
+      console.log("📦 Reproduzindo imagem direto do cache local:", itemUrl);
+    } else if (!navigator.onLine) {
+      img.onerror?.();
+      return;
+    }
+  }
+
+  setMediaElementSource(img, imagePlaybackUrl);
 }
 
 
@@ -4006,6 +4131,62 @@ async function verificarComandosDispositivo() {
   }
 }
 
+async function enviarHeartbeatOnline() {
+  if (!codigoAtual || !navigator.onLine) return;
+
+  const deviceId = gerarDeviceId();
+  const nowIso = new Date().toISOString();
+
+  try {
+    const updateData = {
+      status_tela: "Online",
+      last_ping: nowIso
+    };
+
+    try {
+      updateData.device_id = deviceId;
+      updateData.device_last_seen = nowIso;
+    } catch {}
+
+    await client
+      .from("displays")
+      .update(updateData)
+      .eq("codigo_unico", codigoAtual);
+  } catch (err) {
+    if (isMissingColumnError(err)) {
+      try {
+        await client
+          .from("displays")
+          .update({
+            status_tela: "Online",
+            last_ping: nowIso
+          })
+          .eq("codigo_unico", codigoAtual);
+      } catch {}
+    }
+  }
+
+  try {
+    const { error: dispositivoHeartbeatError } = await client
+      .from("dispositivos")
+      .update({
+        last_seen: nowIso,
+        is_ativo: true,
+        local_nome: localStorage.getItem(LOCAL_TELA_KEY) || codigoAtual
+      })
+      .eq("device_id", deviceId)
+      .eq("codigo_display", codigoAtual);
+
+    if (dispositivoHeartbeatError && !isMissingRelationError(dispositivoHeartbeatError) && !isMissingColumnError(dispositivoHeartbeatError, "last_seen")) {
+      console.warn("⚠️ Erro ao atualizar heartbeat do dispositivo:", dispositivoHeartbeatError);
+    }
+  } catch (err) {
+    if (!isMissingRelationError(err) && !isMissingColumnError(err, "last_seen")) {
+      console.warn("⚠️ Erro ao enviar heartbeat imediato:", err);
+    }
+  }
+}
+
 // ===== Service Worker =====
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('service-worker.js')
@@ -4110,6 +4291,8 @@ window.addEventListener("online", () => {
                   .eq("codigo_unico", codigoAtual);
               }
             }
+
+            await enviarHeartbeatOnline();
           }
         }
       } catch {}
@@ -4130,55 +4313,7 @@ window.addEventListener("online", () => {
 
 setInterval(async () => {
   if (codigoAtual && navigator.onLine) {
-    try {
-      const deviceId = gerarDeviceId();
-
-      // AtualizaÃ§Ã£o bÃ¡sica (sempre funciona)
-      const updateData = { 
-        status_tela: "Online", 
-        last_ping: new Date().toISOString()
-      };
-      
-      // Tentar adicionar campos de dispositivo (opcional)
-      try {
-        updateData.device_id = deviceId;
-        updateData.device_last_seen = new Date().toISOString();
-      } catch {
-        // Ignorar se device_id nÃ£o puder ser gerado
-      }
-      
-      await client
-        .from("displays")
-        .update(updateData)
-        .eq("codigo_unico", codigoAtual);
-    } catch (err) {
-      // Se erro for de coluna nÃ£o encontrada, fazer update sem campos opcionais
-      if (err.message && err.message.includes('column') && err.message.includes('does not exist')) {
-        try {
-          await client
-            .from("displays")
-            .update({ 
-              status_tela: "Online", 
-              last_ping: new Date().toISOString()
-            })
-            .eq("codigo_unico", codigoAtual);
-        } catch {}
-      }
-
-      const { error: dispositivoHeartbeatError } = await client
-        .from("dispositivos")
-        .update({
-          last_seen: new Date().toISOString(),
-          is_ativo: true,
-          local_nome: localStorage.getItem(LOCAL_TELA_KEY) || codigoAtual
-        })
-        .eq("device_id", deviceId)
-        .eq("codigo_display", codigoAtual);
-
-      if (dispositivoHeartbeatError && !isMissingRelationError(dispositivoHeartbeatError) && !isMissingColumnError(dispositivoHeartbeatError, "last_seen")) {
-        console.warn("⚠️ Erro ao atualizar heartbeat do dispositivo:", dispositivoHeartbeatError);
-      }
-    }
+    await enviarHeartbeatOnline();
   }
 }, 5 * 60 * 1000);
 
