@@ -425,6 +425,7 @@ const CODIGO_DISPLAY_KEY = 'mrit_display_codigo';
 const LOCAL_TELA_KEY = 'mrit_local_tela';
 const DEVICE_ID_KEY = 'mrit_device_id';
 const RESTARTING_KEY = 'mrit_is_restarting'; // sessionStorage - indica que estÃ¡ reiniciando
+const DISPOSITIVO_STALE_MS = 15 * 60 * 1000;
 
 // ===== Gerar ID Ãºnico do dispositivo =====
 // IMPORTANTE: O device_id deve ser PERSISTENTE e ÃšNICO por dispositivo fÃ­sico
@@ -470,6 +471,84 @@ function gerarDeviceId() {
   }
   
   return deviceId;
+}
+
+function isMissingRelationError(error) {
+  return !!(error?.message && error.message.includes("relation") && error.message.includes("does not exist"));
+}
+
+function isMissingColumnError(error, columnName) {
+  return !!(error?.message && error.message.includes("column") && error.message.includes("does not exist") && (!columnName || error.message.includes(columnName)));
+}
+
+function getDispositivoHeartbeatMs(registro) {
+  const referencia = registro?.last_seen || registro?.updated_at || registro?.created_at;
+  if (!referencia) return Infinity;
+  const ts = new Date(referencia).getTime();
+  if (!Number.isFinite(ts)) return Infinity;
+  return Date.now() - ts;
+}
+
+function isDispositivoRegistroRecente(registro) {
+  return getDispositivoHeartbeatMs(registro) <= DISPOSITIVO_STALE_MS;
+}
+
+async function listarDispositivosAtivosPorCodigo(codigo) {
+  let query = client
+    .from("dispositivos")
+    .select("id, device_id, local_nome, is_ativo, last_seen, updated_at, created_at")
+    .eq("codigo_display", codigo)
+    .eq("is_ativo", true);
+
+  let { data, error } = await query;
+
+  if (error && isMissingColumnError(error, "last_seen")) {
+    const fallback = await client
+      .from("dispositivos")
+      .select("id, device_id, local_nome, is_ativo, updated_at, created_at")
+      .eq("codigo_display", codigo)
+      .eq("is_ativo", true);
+    data = fallback.data;
+    error = fallback.error;
+  }
+
+  const registros = Array.isArray(data) ? data.slice() : [];
+  registros.sort((a, b) => getDispositivoHeartbeatMs(a) - getDispositivoHeartbeatMs(b));
+  return { data: registros, error };
+}
+
+async function desativarDispositivosStale(codigo, deviceIdAtual, registros) {
+  const base = Array.isArray(registros) ? registros : [];
+  const staleIds = base
+    .filter((registro) => registro?.id)
+    .filter((registro) => registro.device_id !== deviceIdAtual)
+    .filter((registro) => !isDispositivoRegistroRecente(registro))
+    .map((registro) => registro.id);
+
+  if (!staleIds.length) return;
+
+  console.log("🧹 Liberando vínculos antigos para o código:", codigo, staleIds);
+  await client
+    .from("dispositivos")
+    .update({ is_ativo: false })
+    .in("id", staleIds);
+}
+
+async function obterCodigoEmUsoPorOutroDispositivo(codigo, deviceIdAtual) {
+  const { data: registros, error } = await listarDispositivosAtivosPorCodigo(codigo);
+  if (error) {
+    return { codigoEmUso: null, error };
+  }
+
+  await desativarDispositivosStale(codigo, deviceIdAtual, registros);
+
+  const codigoEmUso = registros.find((registro) =>
+    registro?.device_id &&
+    registro.device_id !== deviceIdAtual &&
+    isDispositivoRegistroRecente(registro)
+  ) || null;
+
+  return { codigoEmUso, error: null };
 }
 
 // Garantir que elementos estejam visÃ­veis quando a pÃ¡gina carregar
@@ -983,12 +1062,11 @@ async function verificarCodigoSalvo() {
           
           if (display) {
             // VERIFICAR: Se o cÃ³digo nÃ£o estÃ¡ sendo usado por outro dispositivo
-            const { data: codigoEmUso } = await client
-              .from("dispositivos")
-              .select("device_id, local_nome")
-              .eq("codigo_display", codigoDisplay)
-              .eq("is_ativo", true)
-              .maybeSingle();
+            const { codigoEmUso, error: codigoEmUsoError } = await obterCodigoEmUsoPorOutroDispositivo(codigoDisplay, deviceId);
+
+            if (codigoEmUsoError) {
+              throw codigoEmUsoError;
+            }
             
             if (codigoEmUso && codigoEmUso.device_id !== deviceId) {
               // CÃ³digo estÃ¡ sendo usado por outro dispositivo
@@ -1496,12 +1574,7 @@ async function iniciar() {
       console.log("ðŸ”— Verificando se cÃ³digo jÃ¡ estÃ¡ em uso...");
       
       // VERIFICAR PRIMEIRO: Se o cÃ³digo jÃ¡ estÃ¡ sendo usado por outro dispositivo
-      const { data: codigoEmUso, error: checkError } = await client
-        .from("dispositivos")
-        .select("device_id, local_nome, is_ativo")
-        .eq("codigo_display", codigo)
-        .eq("is_ativo", true)
-        .maybeSingle();
+      const { codigoEmUso, error: checkError } = await obterCodigoEmUsoPorOutroDispositivo(codigo, deviceId);
       
       console.log("ðŸ“Š Resultado da verificaÃ§Ã£o:", codigoEmUso);
       
@@ -1608,12 +1681,11 @@ async function iniciar() {
       console.log("ðŸ”— Salvando dispositivo na tabela dispositivos...");
       
       // VERIFICAÃ‡ÃƒO DUPLA: Verificar novamente antes de salvar (evitar race condition)
-      const { data: verificarDuplo } = await client
-        .from("dispositivos")
-        .select("device_id, local_nome")
-        .eq("codigo_display", codigo)
-        .eq("is_ativo", true)
-        .maybeSingle();
+        const { codigoEmUso: verificarDuplo, error: verificarDuploError } = await obterCodigoEmUsoPorOutroDispositivo(codigo, deviceId);
+
+        if (verificarDuploError) {
+          throw verificarDuploError;
+        }
       
       if (verificarDuplo && verificarDuplo.device_id !== deviceId) {
         console.error("âŒ BLOQUEADO: CÃ³digo foi ocupado enquanto processava (race condition)");
@@ -1667,12 +1739,11 @@ async function iniciar() {
         }
       } else {
         // Criar novo dispositivo - mas verificar novamente antes de inserir (race condition)
-        const { data: verificarNovamente } = await client
-          .from("dispositivos")
-          .select("device_id, local_nome")
-          .eq("codigo_display", codigo)
-          .eq("is_ativo", true)
-          .maybeSingle();
+        const { codigoEmUso: verificarNovamente, error: verificarNovamenteError } = await obterCodigoEmUsoPorOutroDispositivo(codigo, deviceId);
+
+        if (verificarNovamenteError) {
+          throw verificarNovamenteError;
+        }
         
         if (verificarNovamente && verificarNovamente.device_id !== deviceId) {
           console.error("âŒ BLOQUEADO: CÃ³digo foi ocupado enquanto processava (race condition)");
@@ -1709,12 +1780,11 @@ async function iniciar() {
           console.log("âœ… Dispositivo criado na tabela");
           
           // VERIFICAÃ‡ÃƒO FINAL: Confirmar que realmente salvou e nÃ£o hÃ¡ conflito
-          const { data: confirmacao } = await client
-            .from("dispositivos")
-            .select("device_id")
-            .eq("codigo_display", codigo)
-            .eq("is_ativo", true)
-            .maybeSingle();
+          const { codigoEmUso: confirmacao, error: confirmacaoError } = await obterCodigoEmUsoPorOutroDispositivo(codigo, deviceId);
+
+          if (confirmacaoError) {
+            throw confirmacaoError;
+          }
           
           if (confirmacao && confirmacao.device_id !== deviceId) {
             console.error("âŒ CONFLITO DETECTADO: Outro dispositivo ocupou o cÃ³digo apÃ³s salvar");
@@ -4061,6 +4131,8 @@ window.addEventListener("online", () => {
 setInterval(async () => {
   if (codigoAtual && navigator.onLine) {
     try {
+      const deviceId = gerarDeviceId();
+
       // AtualizaÃ§Ã£o bÃ¡sica (sempre funciona)
       const updateData = { 
         status_tela: "Online", 
@@ -4069,7 +4141,6 @@ setInterval(async () => {
       
       // Tentar adicionar campos de dispositivo (opcional)
       try {
-        const deviceId = gerarDeviceId();
         updateData.device_id = deviceId;
         updateData.device_last_seen = new Date().toISOString();
       } catch {
@@ -4092,6 +4163,20 @@ setInterval(async () => {
             })
             .eq("codigo_unico", codigoAtual);
         } catch {}
+      }
+
+      const { error: dispositivoHeartbeatError } = await client
+        .from("dispositivos")
+        .update({
+          last_seen: new Date().toISOString(),
+          is_ativo: true,
+          local_nome: localStorage.getItem(LOCAL_TELA_KEY) || codigoAtual
+        })
+        .eq("device_id", deviceId)
+        .eq("codigo_display", codigoAtual);
+
+      if (dispositivoHeartbeatError && !isMissingRelationError(dispositivoHeartbeatError) && !isMissingColumnError(dispositivoHeartbeatError, "last_seen")) {
+        console.warn("⚠️ Erro ao atualizar heartbeat do dispositivo:", dispositivoHeartbeatError);
       }
     }
   }
