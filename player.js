@@ -2143,8 +2143,12 @@ async function carregarConteudo(codigoConteudo) {
 
     // ===== VERIFICAR CACHE PRIMEIRO =====
     // Se hÃ¡ cache salvo, carregar imediatamente para iniciar rÃ¡pido
-    const cacheSalvo = localStorage.getItem(cacheKeyFor(codigoAtual));
-    if (cacheSalvo && codigoAtual) {
+    const cacheKeys = [];
+    if (codigoConteudo) cacheKeys.push(cacheKeyFor(codigoConteudo));
+    if (codigoAtual && codigoAtual !== codigoConteudo) cacheKeys.push(cacheKeyFor(codigoAtual));
+    for (const cacheKey of cacheKeys) {
+      const cacheSalvo = localStorage.getItem(cacheKey);
+      if (!cacheSalvo) continue;
       try {
         const data = JSON.parse(cacheSalvo);
         if (data.playlist && Array.isArray(data.playlist) && data.playlist.length > 0) {
@@ -2497,8 +2501,20 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
 }
 
 async function salvarCache(playlistData, codigo) {
-  // cache namespaced por cÃ³digo
-  localStorage.setItem(cacheKeyFor(codigo), JSON.stringify({ playlist: playlistData, codigo }));
+  const payload = JSON.stringify({
+    playlist: playlistData,
+    codigo,
+    contentCode: currentContentCode ?? codigo ?? null,
+    displayCode: codigoAtual ?? null,
+  });
+
+  // MantÃ©m o cache acessÃ­vel tanto pelo cÃ³digo do conteÃºdo/playlist quanto pelo cÃ³digo da tela.
+  if (codigo) {
+    localStorage.setItem(cacheKeyFor(codigo), payload);
+  }
+  if (codigoAtual) {
+    localStorage.setItem(cacheKeyFor(codigoAtual), payload);
+  }
 
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
     console.log("ðŸ“¤ Enviando playlist para Service Worker:", playlistData.length, "itens");
@@ -2512,6 +2528,68 @@ async function salvarCache(playlistData, codigo) {
   
   // Atualizar status do cache na tabela displays
   await atualizarStatusCache(codigo, true);
+}
+
+function postServiceWorkerMessage(action, payload = {}, awaitReply = false) {
+  const controller = navigator.serviceWorker?.controller;
+  if (!controller) return Promise.resolve(null);
+
+  if (!awaitReply) {
+    controller.postMessage({ action, ...payload });
+    return Promise.resolve(null);
+  }
+
+  return new Promise((resolve, reject) => {
+    const channel = new MessageChannel();
+    const timeoutId = setTimeout(() => reject(new Error(`timeout aguardando resposta do SW para ${action}`)), 5000);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timeoutId);
+      resolve(event.data || null);
+    };
+    controller.postMessage({ action, ...payload }, [channel.port2]);
+  });
+}
+
+async function limparCacheAtualEReload() {
+  const alvoConteudo = currentContentCode || currentPlaylistId || codigoAtual;
+  console.log("🧹 Limpando cache da tela atual e recarregando conteúdo:", {
+    codigoAtual,
+    currentContentCode,
+    currentPlaylistId,
+  });
+
+  try {
+    if (codigoAtual) localStorage.removeItem(cacheKeyFor(codigoAtual));
+    if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
+    if (currentPlaylistId) localStorage.removeItem(cacheKeyFor(currentPlaylistId));
+  } catch {}
+
+  try {
+    await postServiceWorkerMessage("clearNamespace", {}, true);
+  } catch (err) {
+    console.warn("⚠️ Falha ao aguardar limpeza do cache no Service Worker:", err?.message || err);
+    navigator.serviceWorker?.controller?.postMessage({ action: "clearNamespace" });
+  }
+
+  try { await stopNativeVideoPlayback(); } catch {}
+  try { video.pause(); } catch {}
+  destroyHls();
+  if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+  isPlaying = false;
+  isLoadingVideo = false;
+  currentItemUrl = null;
+  preloadedBufferUrl = null;
+  preloadingBuffer = false;
+  playToken++;
+  currentVideoToken++;
+
+  if (codigoAtual) {
+    await atualizarStatusCache(codigoAtual, false);
+  }
+
+  if (alvoConteudo) {
+    await carregarConteudo(alvoConteudo);
+  }
 }
 
 // Reset agressivo quando entra com um novo cÃ³digo
@@ -4112,6 +4190,15 @@ async function verificarComandosDispositivo() {
           }, 500);
           
           return; // Sair apÃ³s processar restart
+        } else if (comando.command === 'clear_cache') {
+          await client
+            .from("device_commands")
+            .update({ executed: true, executed_at: new Date().toISOString() })
+            .eq("id", comando.id);
+
+          console.log("🧹 Limpando cache remotamente e recarregando conteúdo...");
+          await limparCacheAtualEReload();
+          return;
         } else {
           // Outros comandos podem ser adicionados aqui
           console.log("â„¹ï¸ Comando nÃ£o implementado:", comando.command);

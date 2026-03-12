@@ -527,12 +527,18 @@ self.addEventListener("message", async (event) => {
       const u = new URL(req.url);
       if (isSupabaseStorageURL(u)) await cache.delete(req);
     }
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({ ok: true, action });
+    }
     return;
   }
 
   if (action === "clearAll") {
     await caches.delete(CACHE_NAME);
     await idbClearNamespace(CURRENT_NS);
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({ ok: true, action });
+    }
     return;
   }
 
