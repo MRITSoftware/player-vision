@@ -256,7 +256,7 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
     await nativeCallWithTimeout(plugin.play({
       url: itemUrl,
       fit,
-      muted: true,
+      muted: false,
       useCache,
       token: String(token),
     }), 2000);
@@ -408,7 +408,7 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     try { preloadEl.currentTime = 0; } catch {}
     preloadEl.setAttribute("crossorigin", "anonymous");
     preloadEl.preload = "auto";
-    preloadEl.muted = true;
+    preloadEl.muted = false;
     preloadEl.playsInline = true;
     preloadEl.src = nextUrl;
     preloadEl.load();
@@ -2453,7 +2453,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
       try {
         if (!video.paused) return;
         video.currentTime = currentTime || video.currentTime || 0;
-        await video.play().catch(() => { video.muted = true; video.play(); });
+        await video.play();
         return;
       } catch {
         tocarLoop();
@@ -2712,7 +2712,7 @@ async function tocarLoop() {
     let playbackUrl = itemUrl;
 
     try {
-      nextVideo.muted = true;
+      nextVideo.muted = false;
       nextVideo.playsInline = true;
       nextVideo.setAttribute("crossorigin", "anonymous");
       nextVideo.preload = "auto";
@@ -2846,7 +2846,6 @@ async function tocarLoop() {
       }, 450);
 
       nextVideo.play().catch(() => {
-        nextVideo.muted = true;
         nextVideo.play().catch(() => {
           nextVideo.removeEventListener("playing", onSwapReady);
           nextVideo.removeEventListener("timeupdate", onSwapReady);
