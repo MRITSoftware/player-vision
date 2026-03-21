@@ -31,6 +31,7 @@ const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
 // o modo nativo opcional, com fallback automático para o player web/HTML5.
 const ENABLE_NATIVE_EXO_DEFAULT = true;
 const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = false;
+const SOUND_MODE_SINGLE_VIDEO = true;
 
 let playlist = [];
 let currentIndex = 0;
@@ -386,6 +387,7 @@ async function nativePreloadUpcomingItem(baseIndex) {
 
 async function preloadUpcomingVideoInBuffer(baseIndex) {
   try {
+    if (SOUND_MODE_SINGLE_VIDEO) return;
     // Primeiro ciclo: não pré-carregar (usar internet direta)
     if (isFirstCycle) return;
     
@@ -2707,7 +2709,9 @@ async function tocarLoop() {
     const videoToken = currentVideoToken;
 
     const previousVideo = video;
-    const nextVideo = (videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo;
+    const nextVideo = SOUND_MODE_SINGLE_VIDEO
+      ? previousVideo
+      : ((videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo);
     const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 15000);
     let playbackUrl = itemUrl;
 
