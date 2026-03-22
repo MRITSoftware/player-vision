@@ -31,7 +31,6 @@ const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
 // o modo nativo opcional, com fallback automático para o player web/HTML5.
 const ENABLE_NATIVE_EXO_DEFAULT = true;
 const NATIVE_ANDROID_NATIVE_MEDIA_ONLY = false;
-const SOUND_MODE_SINGLE_VIDEO = true;
 
 let playlist = [];
 let currentIndex = 0;
@@ -257,7 +256,7 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
     await nativeCallWithTimeout(plugin.play({
       url: itemUrl,
       fit,
-      muted: false,
+      muted: true,
       useCache,
       token: String(token),
     }), 2000);
@@ -410,7 +409,7 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
     try { preloadEl.currentTime = 0; } catch {}
     preloadEl.setAttribute("crossorigin", "anonymous");
     preloadEl.preload = "auto";
-    preloadEl.muted = false;
+    preloadEl.muted = true;
     preloadEl.playsInline = true;
     preloadEl.src = nextUrl;
     preloadEl.load();
@@ -2455,7 +2454,7 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
       try {
         if (!video.paused) return;
         video.currentTime = currentTime || video.currentTime || 0;
-        await video.play();
+        await video.play().catch(() => { video.muted = true; video.play(); });
         return;
       } catch {
         tocarLoop();
@@ -2709,14 +2708,12 @@ async function tocarLoop() {
     const videoToken = currentVideoToken;
 
     const previousVideo = video;
-    const nextVideo = SOUND_MODE_SINGLE_VIDEO
-      ? previousVideo
-      : ((videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo);
+    const nextVideo = (videoBuffer && videoBuffer !== previousVideo) ? videoBuffer : previousVideo;
     const safetyTimeout = setTimeout(() => { if (isLoadingVideo) isLoadingVideo = false; }, 15000);
     let playbackUrl = itemUrl;
 
     try {
-      nextVideo.muted = false;
+      nextVideo.muted = true;
       nextVideo.playsInline = true;
       nextVideo.setAttribute("crossorigin", "anonymous");
       nextVideo.preload = "auto";
@@ -2850,6 +2847,7 @@ async function tocarLoop() {
       }, 450);
 
       nextVideo.play().catch(() => {
+        nextVideo.muted = true;
         nextVideo.play().catch(() => {
           nextVideo.removeEventListener("playing", onSwapReady);
           nextVideo.removeEventListener("timeupdate", onSwapReady);
