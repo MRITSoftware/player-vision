@@ -345,6 +345,7 @@ function isVideoItem(item, itemUrl) {
 function isImageItem(item, itemUrl) {
   const tipo = (item?.tipo || "").toLowerCase();
   return tipo.includes("imagem") ||
+    tipo.includes("image") ||
     /\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?|$)/i.test(itemUrl);
 }
 
@@ -386,7 +387,6 @@ async function nativePreloadUpcomingItem(baseIndex) {
 
 async function preloadUpcomingVideoInBuffer(baseIndex) {
   try {
-    if (SOUND_MODE_SINGLE_VIDEO) return;
     // Primeiro ciclo: não pré-carregar (usar internet direta)
     if (isFirstCycle) return;
     
@@ -2213,9 +2213,8 @@ async function carregarConteudo(codigoConteudo) {
       .maybeSingle();
 
     if (conteudo) {
-      const isImageType =
-        (conteudo.tipo || "").toLowerCase() === "imagem" ||
-        /\.(jpg|jpeg|png|webp)(\?|$)/i.test(conteudo.url);
+      const conteudoUrl = conteudo.url || conteudo.urlPortrait || conteudo.urlLandscape || "";
+      const isImageType = isImageItem(conteudo, conteudoUrl);
 
       const newPlaylist = [{
         url: conteudo.url,
@@ -2252,15 +2251,19 @@ async function carregarConteudo(codigoConteudo) {
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
 
-    const newPlaylist = (itens || []).map(item => ({
-      url: item.url,
-      tipo: item.tipo || "VÃ­deo",
-      duration: item.tipo?.toLowerCase() === "imagem" ? 15000 : null,
-      fit: item.fit ?? null,
-      focus: item.focus ?? null,
-      urlPortrait: item.urlPortrait ?? null,
-      urlLandscape: item.urlLandscape ?? null,
-    }));
+    const newPlaylist = (itens || []).map(item => {
+      const itemUrl = item.url || item.urlPortrait || item.urlLandscape || "";
+      const isImageType = isImageItem(item, itemUrl);
+      return {
+        url: item.url,
+        tipo: item.tipo || (isImageType ? "Imagem" : "VÃ­deo"),
+        duration: isImageType ? 15000 : null,
+        fit: item.fit ?? null,
+        focus: item.focus ?? null,
+        urlPortrait: item.urlPortrait ?? null,
+        urlLandscape: item.urlLandscape ?? null,
+      };
+    });
 
     currentPlaylistId = codigoConteudo;
     currentContentCode = codigoConteudo;
@@ -2286,9 +2289,8 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
 
     if (conteudo) {
       // ConteÃºdo Ãºnico
-      const isImageType =
-        (conteudo.tipo || "").toLowerCase() === "imagem" ||
-        /\.(jpg|jpeg|png|webp)(\?|$)/i.test(conteudo.url);
+      const conteudoUrl = conteudo.url || conteudo.urlPortrait || conteudo.urlLandscape || "";
+      const isImageType = isImageItem(conteudo, conteudoUrl);
 
       const newPlaylist = [{
         url: conteudo.url,
@@ -2334,15 +2336,19 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
 
-    const newPlaylist = (itens || []).map(item => ({
-      url: item.url,
-      tipo: item.tipo || "VÃ­deo",
-      duration: item.tipo?.toLowerCase() === "imagem" ? 15000 : null,
-      fit: item.fit ?? null,
-      focus: item.focus ?? null,
-      urlPortrait: item.urlPortrait ?? null,
-      urlLandscape: item.urlLandscape ?? null,
-    }));
+    const newPlaylist = (itens || []).map(item => {
+      const itemUrl = item.url || item.urlPortrait || item.urlLandscape || "";
+      const isImageType = isImageItem(item, itemUrl);
+      return {
+        url: item.url,
+        tipo: item.tipo || (isImageType ? "Imagem" : "VÃ­deo"),
+        duration: isImageType ? 15000 : null,
+        fit: item.fit ?? null,
+        focus: item.focus ?? null,
+        urlPortrait: item.urlPortrait ?? null,
+        urlLandscape: item.urlLandscape ?? null,
+      };
+    });
 
     // Comparar com cache atual (respeitando a ordem dos itens)
     const cacheAtual = playlist || [];
@@ -2656,7 +2662,7 @@ async function tocarLoop() {
   while (attempts < playlist.length) {
     const candidate = playlist[currentIndex];
     const candidateUrl = candidate ? pickSourceForOrientation(candidate) : null;
-    if (candidate && candidate.url && candidateUrl && !isItemOnCooldown(candidateUrl)) {
+    if (candidate && candidateUrl && !isItemOnCooldown(candidateUrl)) {
       item = candidate;
       itemUrl = candidateUrl;
       break;
@@ -3390,7 +3396,8 @@ function proximoItem() {
   // imagem Ãºnica estÃ¡tica: nÃ£o avanÃ§a
   if (!currentPlaylistId && playlist.length === 1) {
     const only = playlist[0];
-    const isImg = /\.(jpg|jpeg|png|webp)(\?|$)/i.test(only.url) || (only.tipo || "").toLowerCase() === "imagem";
+    const onlyUrl = pickSourceForOrientation(only);
+    const isImg = isImageItem(only, onlyUrl);
     if (isImg && only.duration === 0) {
       // Verificar cÃ³digo mesmo em imagem estÃ¡tica
       verificarCodigoDispositivoAoCiclo();
@@ -4171,44 +4178,64 @@ async function verificarComandosDispositivo() {
     // Processar cada comando
     for (const comando of comandos) {
       try {
-        console.log("ðŸ“¨ Processando comando:", comando.command, "para device:", deviceId);
+        const commandName = String(comando.command || "").trim().toLowerCase();
+        console.log("ðŸ“¨ Processando comando:", commandName, "para device:", deviceId);
+
+        const marcarComandoExecutado = async () => {
+          const payload = {
+            executed: true,
+            executed_at: new Date().toISOString(),
+          };
+
+          let { error: updateError } = await client
+            .from("device_commands")
+            .update(payload)
+            .eq("id", comando.id);
+
+          if (updateError && isMissingColumnError(updateError, "executed_at")) {
+            const fallback = await client
+              .from("device_commands")
+              .update({ executed: true })
+              .eq("id", comando.id);
+            updateError = fallback.error;
+          }
+
+          if (updateError && !isMissingRelationError(updateError)) {
+            throw updateError;
+          }
+        };
         
-        if (comando.command === 'restart_app') {
+        if (commandName === 'restart_app' || commandName === 'restart' || commandName === 'reload_app') {
           // Marcar como restart antes de recarregar
           sessionStorage.setItem(RESTARTING_KEY, 'true');
           
           // Marcar comando como executado
-          await client
-            .from("device_commands")
-            .update({ executed: true, executed_at: new Date().toISOString() })
-            .eq("id", comando.id);
+          await marcarComandoExecutado();
           
           console.log("ðŸ”„ Reiniciando app...");
           
           // Aguardar um pouco para garantir que o sessionStorage foi salvo
           setTimeout(() => {
-            location.reload();
+            try {
+              location.reload();
+            } catch {
+              window.location.replace(window.location.href);
+            }
           }, 500);
           
           return; // Sair apÃ³s processar restart
-        } else if (comando.command === 'clear_cache') {
-          await client
-            .from("device_commands")
-            .update({ executed: true, executed_at: new Date().toISOString() })
-            .eq("id", comando.id);
+        } else if (commandName === 'clear_cache' || commandName === 'clean_cache') {
+          await marcarComandoExecutado();
 
           console.log("🧹 Limpando cache remotamente e recarregando conteúdo...");
           await limparCacheAtualEReload();
           return;
         } else {
           // Outros comandos podem ser adicionados aqui
-          console.log("â„¹ï¸ Comando nÃ£o implementado:", comando.command);
+          console.log("â„¹ï¸ Comando nÃ£o implementado:", commandName);
           
           // Marcar como executado mesmo assim (para nÃ£o ficar pendente)
-          await client
-            .from("device_commands")
-            .update({ executed: true, executed_at: new Date().toISOString() })
-            .eq("id", comando.id);
+          await marcarComandoExecutado();
         }
       } catch (err) {
         console.error("âŒ Erro ao processar comando:", err);
