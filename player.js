@@ -1334,6 +1334,24 @@ function pickSourceForOrientation(item) {
   return pickSourceForOrientationAndTier(item, "default");
 }
 
+function shouldRotateImageForLandscape(item, selectedUrl, imageEl) {
+  if (ORIENTATION !== "landscape" || !imageEl) return false;
+
+  const landscapeUrl = (item?.urlLandscape || "").trim();
+  if (landscapeUrl && selectedUrl === landscapeUrl) return false;
+
+  const portraitUrl = (item?.urlPortrait || "").trim();
+  if (portraitUrl && selectedUrl === portraitUrl) return true;
+
+  const naturalWidth = Number(imageEl.naturalWidth || 0);
+  const naturalHeight = Number(imageEl.naturalHeight || 0);
+  if (naturalWidth > 0 && naturalHeight > 0) {
+    return naturalHeight > naturalWidth;
+  }
+
+  return false;
+}
+
 // ===== Player =====
 function startPlayer() {
   iniciar();
@@ -3217,6 +3235,7 @@ async function tocarLoop() {
     const fit = item.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
     const focus = item.focus || "center center";
     applyFit(img, fit, focus);
+    img.classList.toggle("rotate-for-landscape", shouldRotateImageForLandscape(item, itemUrl, img));
 
     for (const v of getUniqueVideoEls()) {
       try {
@@ -3253,6 +3272,7 @@ async function tocarLoop() {
   };
 
   img.onerror = () => {
+    img.classList.remove("rotate-for-landscape");
     isPlaying = false;
     registerItemFailure(itemUrl, "image_error");
     proximoItem();
