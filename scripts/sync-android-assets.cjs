@@ -14,6 +14,7 @@ const appDir = path.join(androidDir, "app");
 const appBuildGradle = path.join(appDir, "build.gradle");
 const icon192 = path.join(root, "icon-192.png");
 const icon512 = path.join(root, "icon-512.png");
+const splashSourcePreferred = path.join(root, "logo vision.png");
 const resDir = path.join(appDir, "src", "main", "res");
 
 function ensureDir(dir) {
@@ -81,6 +82,10 @@ async function syncAndroidIconsAndSplash() {
   if (!fs.existsSync(icon512)) {
     console.warn("[assets] icon-512.png not found. Splash unchanged.");
   }
+  const splashSource = fs.existsSync(splashSourcePreferred) ? splashSourcePreferred : icon512;
+  if (!fs.existsSync(splashSource)) {
+    console.warn("[assets] No splash source found. Splash unchanged.");
+  }
 
   if (fs.existsSync(icon192)) {
     const mipmaps = [
@@ -128,9 +133,9 @@ async function syncAndroidIconsAndSplash() {
     console.log("[assets] Android launcher icons updated from icon-192.png.");
   }
 
-  if (fs.existsSync(icon512)) {
-    await writePng(icon512, path.join(resDir, "drawable", "splash.png"));
-    await writePng(icon512, path.join(resDir, "drawable-night", "splash.png"));
+  if (fs.existsSync(splashSource)) {
+    await writePng(splashSource, path.join(resDir, "drawable", "splash.png"));
+    await writePng(splashSource, path.join(resDir, "drawable-night", "splash.png"));
     const allSplashFiles = [];
     const stack = [resDir];
     while (stack.length > 0) {
@@ -146,9 +151,9 @@ async function syncAndroidIconsAndSplash() {
       }
     }
     for (const splashPath of allSplashFiles) {
-      await writePng(icon512, splashPath);
+      await writePng(splashSource, splashPath);
     }
-    console.log("[assets] Android splash updated from icon-512.png.");
+    console.log(`[assets] Android splash updated from ${path.basename(splashSource)}.`);
   }
 }
 

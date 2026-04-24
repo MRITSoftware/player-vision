@@ -16,10 +16,10 @@ module.exports = {
     SplashScreen: {
       launchShowDuration: 2000,
       launchAutoHide: true,
-      backgroundColor: "#000000",
+      backgroundColor: "#FFFFFF",
       androidSplashResourceName: "splash",
-      // Usa CENTER_CROP para preencher a tela sem distorcer (corta só excesso)
-      androidScaleType: "CENTER_CROP",
+      // FIT_CENTER preserva a arte inteira em retrato e paisagem, sem estourar.
+      androidScaleType: "FIT_CENTER",
       showSpinner: false,
       splashFullScreen: true,
       splashImmersive: true,
