@@ -24,6 +24,7 @@ const BUFFERING_MODE = "progressive"; // ou "full" ou "immediate"
 const MIN_BUFFER_SECONDS = 2; // usado apenas no modo "progressive"
 const ITEM_FAILURE_COOLDOWN_MS = 180000; // 3 min
 const ITEM_FAILURES_BEFORE_COOLDOWN = 2;
+const REDUCED_MEDIA_MODE_KEY = "mrit_reduced_media_mode_v1";
 // Modo nativo (ExoPlayer) no APK:
 // - ENABLE_NATIVE_EXO_DEFAULT: tenta usar player nativo quando disponível
 // - NATIVE_ANDROID_NATIVE_MEDIA_ONLY: se true, obriga SEMPRE modo nativo (sem fallback web)
@@ -64,6 +65,12 @@ let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
 const itemFailureState = new Map();
+const videoCacheRepairState = new Map();
+const VIDEO_DURATION_STORAGE_KEY = "mrit_video_duration_map_v1";
+const VIDEO_STALL_RECACHE_TOLERANCE_SECONDS = 1.5;
+const VIDEO_CACHE_REPAIR_COOLDOWN_MS = 120000;
+let weakDeviceDetected = false;
+let reducedMediaMode = false;
 let nativeExoListenerHandle = null;
 let nativeExoPendingToken = null;
 let nativeExoPendingUrl = null;
@@ -140,6 +147,216 @@ function registerItemFailure(url, reason = "unknown") {
 function clearItemFailure(url) {
   if (!url) return;
   if (itemFailureState.has(url)) itemFailureState.delete(url);
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function loadReducedMediaMode() {
+  try {
+    return localStorage.getItem(REDUCED_MEDIA_MODE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveReducedMediaMode(value) {
+  try {
+    localStorage.setItem(REDUCED_MEDIA_MODE_KEY, value ? "1" : "0");
+  } catch {}
+}
+
+function evaluateWeakDeviceProfile() {
+  const memory = toFiniteNumber(navigator.deviceMemory, 0);
+  const cores = toFiniteNumber(navigator.hardwareConcurrency, 0);
+  const ua = String(navigator.userAgent || "").toLowerCase();
+  const isAndroid = ua.includes("android");
+
+  if (memory > 0 && memory <= 2) return true;
+  if (cores > 0 && cores <= 4) return true;
+  if (isAndroid && memory > 0 && memory <= 3 && cores > 0 && cores <= 8) return true;
+  return false;
+}
+
+function shouldPreferReducedMedia() {
+  return !!(weakDeviceDetected || reducedMediaMode);
+}
+
+function enableReducedMediaMode(reason = "unknown") {
+  if (reducedMediaMode) return;
+  reducedMediaMode = true;
+  saveReducedMediaMode(true);
+  console.warn("🐢 Modo de mídia reduzida ativado:", reason);
+}
+
+function initializeAdaptivePlaybackMode() {
+  weakDeviceDetected = evaluateWeakDeviceProfile();
+  reducedMediaMode = loadReducedMediaMode();
+  if (weakDeviceDetected) {
+    console.warn("🐢 Dispositivo classificado como mais fraco; player vai preferir modo leve");
+  }
+}
+
+function pickNamedUrl(item, keys) {
+  if (!item || !Array.isArray(keys)) return "";
+  for (const key of keys) {
+    const value = item[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function pickSourceForOrientationAndTier(item, tier = "default") {
+  const normalizedTier = String(tier || "default").toLowerCase();
+  if (normalizedTier === "low") {
+    if (ORIENTATION === "portrait") {
+      return pickNamedUrl(item, ["urlPortraitLow", "url_portrait_low", "urlLowPortrait", "url_low_portrait"]) ||
+        pickNamedUrl(item, ["urlLow", "url_low"]) ||
+        pickSourceForOrientationAndTier(item, "default");
+    }
+    if (ORIENTATION === "landscape") {
+      return pickNamedUrl(item, ["urlLandscapeLow", "url_landscape_low", "urlLowLandscape", "url_low_landscape"]) ||
+        pickNamedUrl(item, ["urlLow", "url_low"]) ||
+        pickSourceForOrientationAndTier(item, "default");
+    }
+    return pickNamedUrl(item, ["urlLow", "url_low"]) || pickSourceForOrientationAndTier(item, "default");
+  }
+
+  if (normalizedTier === "medium") {
+    if (ORIENTATION === "portrait") {
+      return pickNamedUrl(item, ["urlPortraitMedium", "url_portrait_medium", "urlMediumPortrait", "url_medium_portrait"]) ||
+        pickNamedUrl(item, ["urlMedium", "url_medium"]) ||
+        pickSourceForOrientationAndTier(item, "default");
+    }
+    if (ORIENTATION === "landscape") {
+      return pickNamedUrl(item, ["urlLandscapeMedium", "url_landscape_medium", "urlMediumLandscape", "url_medium_landscape"]) ||
+        pickNamedUrl(item, ["urlMedium", "url_medium"]) ||
+        pickSourceForOrientationAndTier(item, "default");
+    }
+    return pickNamedUrl(item, ["urlMedium", "url_medium"]) || pickSourceForOrientationAndTier(item, "default");
+  }
+
+  if (ORIENTATION === "portrait" && item.urlPortrait) return item.urlPortrait;
+  if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
+  return item.url;
+}
+
+function loadStoredVideoDurationMap() {
+  try {
+    const raw = localStorage.getItem(VIDEO_DURATION_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredVideoDurationMap(map) {
+  try {
+    localStorage.setItem(VIDEO_DURATION_STORAGE_KEY, JSON.stringify(map || {}));
+  } catch {}
+}
+
+function rememberVideoDuration(url, durationSeconds) {
+  if (!url || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return;
+  const map = loadStoredVideoDurationMap();
+  const rounded = Math.round(durationSeconds * 1000) / 1000;
+  for (const candidate of buildCacheLookupCandidates(url)) {
+    map[candidate] = rounded;
+  }
+  saveStoredVideoDurationMap(map);
+}
+
+function getRememberedVideoDuration(url) {
+  if (!url) return null;
+  const map = loadStoredVideoDurationMap();
+  for (const candidate of buildCacheLookupCandidates(url)) {
+    const duration = Number(map[candidate] || 0);
+    if (Number.isFinite(duration) && duration > 0) return duration;
+  }
+  return null;
+}
+
+async function readVideoDurationFromBlob(blob) {
+  if (!blob || blob.size <= 0) return null;
+  return new Promise((resolve) => {
+    const probe = document.createElement("video");
+    const objectUrl = URL.createObjectURL(blob);
+    let done = false;
+
+    const finish = (value = null) => {
+      if (done) return;
+      done = true;
+      probe.removeAttribute("src");
+      try { probe.load(); } catch {}
+      try { URL.revokeObjectURL(objectUrl); } catch {}
+      resolve(value);
+    };
+
+    probe.preload = "metadata";
+    probe.muted = true;
+    probe.playsInline = true;
+    probe.onloadedmetadata = () => finish(Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : null);
+    probe.onerror = () => finish(null);
+    setTimeout(() => finish(null), 8000);
+    probe.src = objectUrl;
+  });
+}
+
+async function deleteCachedVideoEntries(url) {
+  if (!url) return 0;
+  const candidates = buildCacheLookupCandidates(url);
+  const keys = await idbAllKeys();
+  let deleted = 0;
+
+  for (const rawKey of keys) {
+    const key = String(rawKey);
+    if (!candidates.some((candidate) => key.endsWith(`::${candidate}`))) continue;
+    await idbDel(key);
+    deleted++;
+  }
+
+  return deleted;
+}
+
+async function repairVideoCacheInBackground(url, reason = "unknown") {
+  if (!codigoAtual || !url || !navigator.onLine) return false;
+
+  const now = Date.now();
+  const state = videoCacheRepairState.get(url) || { inFlight: false, lastAttemptAt: 0 };
+  if (state.inFlight) return false;
+  if (state.lastAttemptAt && (now - state.lastAttemptAt) < VIDEO_CACHE_REPAIR_COOLDOWN_MS) return false;
+
+  state.inFlight = true;
+  state.lastAttemptAt = now;
+  videoCacheRepairState.set(url, state);
+
+  try {
+    console.warn("🔧 Refazendo cache do vídeo em background:", { url, reason });
+    const response = await fetch(url, { method: "GET", cache: "no-store" });
+    if (!response.ok) throw new Error(`status_${response.status}`);
+
+    const blob = await response.blob();
+    if (!blob || blob.size <= 0) throw new Error("blob_vazio");
+
+    const detectedDuration = await readVideoDurationFromBlob(blob);
+    if (detectedDuration) rememberVideoDuration(url, detectedDuration);
+
+    await deleteCachedVideoEntries(url);
+    await idbSet(`${codigoAtual}::${url}`, blob);
+    console.log("✅ Cache do vídeo reparado:", url, "bytes:", blob.size);
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Falha ao reparar cache do vídeo:", url, err?.message || err);
+    return false;
+  } finally {
+    const latestState = videoCacheRepairState.get(url) || state;
+    latestState.inFlight = false;
+    videoCacheRepairState.set(url, latestState);
+  }
 }
 
 function isNativeAndroid() {
@@ -324,11 +541,21 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
 
     const stalledForMs = Date.now() - lastProgressAt;
     if (stalledForMs >= 7000) {
+      const rememberedDuration = getRememberedVideoDuration(itemUrl);
+      const detectedDuration = Number(videoEl.duration || 0);
+      const expectedDuration = rememberedDuration || (Number.isFinite(detectedDuration) && detectedDuration > 0 ? detectedDuration : null);
+      const stalledBeforeExpectedEnd = expectedDuration && (t + VIDEO_STALL_RECACHE_TOLERANCE_SECONDS) < expectedDuration;
+      if (stalledBeforeExpectedEnd || weakDeviceDetected) {
+        enableReducedMediaMode(`stall_watchdog:${itemUrl}`);
+      }
       console.warn("⚠️ Vídeo travado por muito tempo, pulando item:", itemUrl);
       stopPlaybackWatchdog();
       isPlaying = false;
       try { videoEl.pause(); } catch {}
       registerItemFailure(itemUrl, "stall_watchdog");
+      if (stalledBeforeExpectedEnd) {
+        repairVideoCacheInBackground(itemUrl, `stall_before_expected_end_${t.toFixed(2)}s_of_${expectedDuration.toFixed(2)}s`).catch(() => {});
+      }
       proximoItem();
       verificarMudancasPosTrocaEmBackground();
     }
@@ -353,6 +580,7 @@ async function nativePreloadUpcomingItem(baseIndex) {
   if (!isNativeMediaModeActive()) return;
   const plugin = getNativeExoPlugin();
   if (!plugin || !Array.isArray(playlist) || playlist.length < 2) return;
+  if (shouldPreferReducedMedia()) return;
   
   // Primeiro ciclo: não pré-carregar (usar internet direta)
   if (isFirstCycle) return;
@@ -389,6 +617,7 @@ async function preloadUpcomingVideoInBuffer(baseIndex) {
   try {
     // Primeiro ciclo: não pré-carregar (usar internet direta)
     if (isFirstCycle) return;
+    if (shouldPreferReducedMedia()) return;
     
     if (preloadingBuffer || !playlist.length) return;
     const preloadEl = (videoBuffer && videoBuffer !== video) ? videoBuffer : null;
@@ -929,11 +1158,14 @@ function buildPlaylistSignature(items) {
     const url = (item?.url || "").trim();
     const urlPortrait = (item?.urlPortrait || "").trim();
     const urlLandscape = (item?.urlLandscape || "").trim();
+    const urlLow = (item?.urlLow || item?.url_low || "").trim();
+    const urlPortraitLow = (item?.urlPortraitLow || item?.url_portrait_low || "").trim();
+    const urlLandscapeLow = (item?.urlLandscapeLow || item?.url_landscape_low || "").trim();
     const tipo = (item?.tipo || "").toString().trim().toLowerCase();
     const duration = item?.duration ?? "";
     const fit = item?.fit ?? "";
     const focus = item?.focus ?? "";
-    return `${index}::${url}::${urlPortrait}::${urlLandscape}::${tipo}::${duration}::${fit}::${focus}`;
+    return `${index}::${url}::${urlPortrait}::${urlLandscape}::${urlLow}::${urlPortraitLow}::${urlLandscapeLow}::${tipo}::${duration}::${fit}::${focus}`;
   }).join("||");
 }
 
@@ -1095,9 +1327,11 @@ function applyFit(el, fit = "cover", pos = "center center") {
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
 function pickSourceForOrientation(item) {
-  if (ORIENTATION === "portrait" && item.urlPortrait)  return item.urlPortrait;
-  if (ORIENTATION === "landscape" && item.urlLandscape) return item.urlLandscape;
-  return item.url;
+  if (shouldPreferReducedMedia()) {
+    const reducedSource = pickSourceForOrientationAndTier(item, "low");
+    if (reducedSource) return reducedSource;
+  }
+  return pickSourceForOrientationAndTier(item, "default");
 }
 
 // ===== Player =====
@@ -1598,6 +1832,7 @@ async function iniciar() {
   console.log('ðŸš€ iniciar() chamada');
   console.log('ðŸ“¡ Status online:', navigator.onLine);
   console.log('ðŸ”— Supabase client:', typeof client !== 'undefined' ? 'disponÃ­vel' : 'NÃƒO DISPONÃVEL');
+  initializeAdaptivePlaybackMode();
   
   // Debug temporÃ¡rio: alert no APK para ver se funÃ§Ã£o estÃ¡ sendo chamada
   if (window.matchMedia('(display-mode: standalone)').matches || document.referrer.includes('android-app://')) {
@@ -2781,6 +3016,16 @@ async function tocarLoop() {
         if (!ok || nextVideo.readyState < 3) throw new Error("video nao pronto");
       }
 
+      const persistVideoDuration = () => {
+        const detectedDuration = Number(nextVideo.duration || 0);
+        if (Number.isFinite(detectedDuration) && detectedDuration > 0) {
+          rememberVideoDuration(itemUrl, detectedDuration);
+        }
+      };
+      nextVideo.addEventListener("loadedmetadata", persistVideoDuration, { once: true });
+      nextVideo.addEventListener("durationchange", persistVideoDuration, { once: true });
+      persistVideoDuration();
+
       if (myToken !== playToken || videoToken !== currentVideoToken) {
         isLoadingVideo = false;
         clearTimeout(safetyTimeout);
@@ -2874,6 +3119,7 @@ async function tocarLoop() {
           if (lastFailedRetries > 1) {
             lastFailedUrl = null;
             lastFailedRetries = 0;
+            if (weakDeviceDetected) enableReducedMediaMode(`play_start_failed:${itemUrl}`);
             registerItemFailure(itemUrl, "play_start_failed_twice");
             proximoItem();
             return;
@@ -2899,6 +3145,7 @@ async function tocarLoop() {
             setTimeout(() => tocarLoop(), 80);
             return;
           }
+          if (weakDeviceDetected) enableReducedMediaMode(`very_short_end:${itemUrl}`);
           registerItemFailure(itemUrl, "very_short_end");
         } else {
           lastShortEndUrl = null;
@@ -2926,6 +3173,7 @@ async function tocarLoop() {
         lastFailedRetries = 0;
         videoRetryCount = 0;
         isPlaying = false;
+        enableReducedMediaMode(`load_failed:${itemUrl}`);
         registerItemFailure(itemUrl, "load_failed_twice");
         proximoItem();
         return;
