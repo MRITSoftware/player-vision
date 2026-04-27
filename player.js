@@ -1898,6 +1898,9 @@ async function iniciar() {
   }
   
   const codigo = codigoField.value.trim().toUpperCase();
+  const hasCachedPlaylist = hasSavedPlaylistCache(codigo);
+  const savedLocalName = (localStorage.getItem(LOCAL_TELA_KEY) || codigo).trim() || codigo;
+  let forceOfflineStartup = false;
   console.log('ðŸ“ CÃ³digo digitado:', codigo);
   
   if (!codigo) {
@@ -1921,34 +1924,55 @@ async function iniciar() {
       
       if (displayError) {
         console.error("âŒ Erro ao buscar display:", displayError);
+        if (hasCachedPlaylist) {
+          console.warn("Falha ao buscar display no servidor. Usando informacoes salvas do cache local.");
+          local = savedLocalName;
+          forceOfflineStartup = true;
+        } else {
+          showNotification("Erro ao buscar informa\u00E7\u00F5es do display. Tente novamente.");
+          ensureElementsVisible();
+          return;
+        }
+      }
+      
+      if (!display && !forceOfflineStartup) {
+        if (hasCachedPlaylist) {
+          console.warn("Display nao confirmado no servidor. Seguindo com cache salvo.");
+          local = savedLocalName;
+          forceOfflineStartup = true;
+        } else {
+          showNotification("\u274C C\u00F3digo do display n\u00E3o encontrado!");
+          ensureElementsVisible();
+          return;
+        }
+      }
+      
+      if (!forceOfflineStartup) {
+        local = display.nome || codigo; // Usa o nome do display, ou o cÃ³digo como fallback
+        console.log("âœ… Display encontrado:", display.nome);
+      }
+    } catch (err) {
+      console.error("âŒ Erro ao buscar display:", err);
+      if (hasCachedPlaylist) {
+        console.warn("Falha na consulta do display. Iniciando com cache local.");
+        local = savedLocalName;
+        forceOfflineStartup = true;
+      } else {
         showNotification("Erro ao buscar informa\u00E7\u00F5es do display. Tente novamente.");
         ensureElementsVisible();
         return;
       }
-      
-      if (!display) {
-        showNotification("\u274C C\u00F3digo do display n\u00E3o encontrado!");
-        ensureElementsVisible();
-        return;
-      }
-      
-      local = display.nome || codigo; // Usa o nome do display, ou o cÃ³digo como fallback
-      console.log("âœ… Display encontrado:", display.nome);
-    } catch (err) {
-      console.error("âŒ Erro ao buscar display:", err);
-      showNotification("Erro ao buscar informa\u00E7\u00F5es do display. Tente novamente.");
-      ensureElementsVisible();
-      return;
     }
   } else {
     // Se offline, usa o cÃ³digo como fallback
-    local = codigo;
+    local = savedLocalName;
+    forceOfflineStartup = hasCachedPlaylist;
   }
   
   // NÃƒO definir codigoAtual ainda - sÃ³ depois de validar
   
   // VALIDAÃ‡ÃƒO PRIMEIRO: Verificar se cÃ³digo jÃ¡ estÃ¡ em uso ANTES de fazer qualquer coisa
-  if (navigator.onLine) {
+  if (navigator.onLine && !forceOfflineStartup) {
     try {
       const deviceId = gerarDeviceId();
       console.log("ðŸ” Device ID:", deviceId);
@@ -2228,9 +2252,11 @@ async function iniciar() {
   }
 
   // Reset agressivo ao trocar de cÃ³digo (garante que nada da sessÃ£o anterior vaze)
-  await resetAllCachesForNewCode();
+  if (codigoAnterior && codigoAnterior !== codigo) {
+    await resetAllCachesForNewCode();
+  }
 
-  if (!navigator.onLine) {
+  if (!navigator.onLine || forceOfflineStartup) {
     const cache = localStorage.getItem(cacheKeyFor(codigo));
     if (cache) {
       const data = JSON.parse(cache);
