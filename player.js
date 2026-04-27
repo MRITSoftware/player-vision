@@ -1152,6 +1152,19 @@ function cacheKeyFor(codigo) {
   return `playlist_cache_${codigo}`;
 }
 
+function hasSavedPlaylistCache(codigo) {
+  if (!codigo) return false;
+  try {
+    const raw = localStorage.getItem(cacheKeyFor(codigo));
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    return Array.isArray(data?.playlist) && data.playlist.length > 0;
+  } catch (err) {
+    console.warn("Falha ao ler cache salvo da playlist:", codigo, err?.message || err);
+    return false;
+  }
+}
+
 function buildPlaylistSignature(items) {
   const list = Array.isArray(items) ? items : [];
   return list.map((item, index) => {
@@ -1820,6 +1833,15 @@ async function verificarCodigoSalvo() {
               return;
             }
           } else {
+            if (hasSavedPlaylistCache(codigoSalvo)) {
+              console.warn("Codigo salvo nao foi confirmado no banco, mas existe cache local. Iniciando em modo offline.");
+              showNotification("Sem confirmacao do servidor. Iniciando com o cache salvo.", "warning");
+              setTimeout(() => {
+                startPlayer();
+              }, 500);
+              return;
+            }
+
             console.log("âŒ CÃ³digo nÃ£o encontrado no banco, limpar salvamento");
             localStorage.removeItem(CODIGO_DISPLAY_KEY);
             if (codigoField) codigoField.value = "";
@@ -1828,6 +1850,15 @@ async function verificarCodigoSalvo() {
           }
         } catch (err) {
           console.error("Erro ao verificar cÃ³digo no banco:", err);
+          if (hasSavedPlaylistCache(codigoSalvo)) {
+            console.warn("Falha ao validar codigo no servidor. Usando cache salvo para iniciar.");
+            showNotification("Sem conexao estavel. Iniciando com o cache salvo.", "warning");
+            setTimeout(() => {
+              startPlayer();
+            }, 500);
+            return;
+          }
+
           // Em caso de erro, manter o cÃ³digo salvo mas nÃ£o iniciar automaticamente
           showNotification("Erro ao verificar c\u00F3digo. Verifique sua conex\u00E3o.");
         }
@@ -4715,31 +4746,9 @@ window.addEventListener("beforeunload", () => {
     return;
   }
 
-  // Se nÃ£o Ã© restart, limpar normalmente
-  console.log("ðŸšª Fechando app - limpando dados");
-  
-  // limpa cache do namespace desta tela
-  navigator.serviceWorker.controller?.postMessage({ action: "clearNamespace" });
-
-  const url = `${supabaseUrl}/rest/v1/displays?codigo_unico=eq.${encodeURIComponent(codigoAtual)}&apikey=${encodeURIComponent(supabaseKey)}`;
-  const payload = JSON.stringify({ is_locked: false, status: "DisponÃ­vel" });
-  const blob = new Blob([payload], { type: "application/json" });
-  navigator.sendBeacon(url, blob);
-  
-  // Desativar dispositivo na tabela dispositivos
-  try {
-    const deviceId = gerarDeviceId();
-    const urlDispositivos = `${supabaseUrl}/rest/v1/dispositivos?device_id=eq.${encodeURIComponent(deviceId)}&apikey=${encodeURIComponent(supabaseKey)}`;
-    const payloadDispositivos = JSON.stringify({ is_ativo: false });
-    const blobDispositivos = new Blob([payloadDispositivos], { type: "application/json" });
-    navigator.sendBeacon(urlDispositivos, blobDispositivos);
-  } catch (err) {
-    // Ignorar erros no beforeunload
-  }
-  
-  // Limpar localStorage quando fechar (jÃ¡ que is_locked = false)
-  localStorage.removeItem(CODIGO_DISPLAY_KEY);
-  localStorage.removeItem(LOCAL_TELA_KEY);
+  // Fechar o app nao deve invalidar o pareamento local nem o cache.
+  // Isso preserva a retomada apos reboot e a inicializacao sem internet.
+  console.log("Fechando app - mantendo codigo e cache local para retomada");
 });
 
 // ===== Debug Helper =====
