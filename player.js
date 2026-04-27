@@ -50,6 +50,7 @@ let isPlaying = false;
 let realtimeReady = false;
 let onlineDebounceId = null;
 let pendingResync = false;
+let awaitingServerRecovery = false;
 let lastCycleRefreshAt = 0;
 let videoRetryCount = 0;
 const MAX_VIDEO_RETRIES = 3;
@@ -2051,6 +2052,7 @@ async function iniciar() {
   }
   
   codigoAtual = codigo;
+  awaitingServerRecovery = false;
   
   // Configurar namespace no Service Worker IMEDIATAMENTE para usar cache correto
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -2078,7 +2080,7 @@ async function iniciar() {
   setTimeout(() => entrarFullscreen(), 2000);
   
   // Salvar na tabela dispositivos (nova tabela)
-  if (navigator.onLine) {
+  if (navigator.onLine && !forceOfflineStartup) {
     try {
       const deviceId = gerarDeviceId();
       
@@ -2259,6 +2261,7 @@ async function iniciar() {
   if (!navigator.onLine || forceOfflineStartup) {
     const cache = localStorage.getItem(cacheKeyFor(codigo));
     if (cache) {
+      awaitingServerRecovery = !!forceOfflineStartup;
       const data = JSON.parse(cache);
       playlist = data.playlist;
       currentPlaylistId = data.codigo;
@@ -4627,6 +4630,54 @@ async function enviarHeartbeatOnline() {
   }
 }
 
+async function tentarRecuperarDispositivoNoServidor() {
+  if (!codigoAtual || !navigator.onLine) return false;
+
+  try {
+    const deviceId = gerarDeviceId();
+    const localNome = localStorage.getItem(LOCAL_TELA_KEY) || codigoAtual;
+    const payload = {
+      codigo_display: codigoAtual,
+      local_nome: localNome,
+      last_seen: new Date().toISOString(),
+      is_ativo: true
+    };
+
+    const { data: dispositivoExistente, error: selectError } = await client
+      .from("dispositivos")
+      .select("id")
+      .eq("device_id", deviceId)
+      .maybeSingle();
+
+    if (selectError) {
+      if (isMissingRelationError(selectError)) return false;
+      throw selectError;
+    }
+
+    if (dispositivoExistente) {
+      const { error: updateError } = await client
+        .from("dispositivos")
+        .update(payload)
+        .eq("device_id", deviceId);
+      if (updateError && !isMissingRelationError(updateError)) throw updateError;
+    } else {
+      const { error: insertError } = await client
+        .from("dispositivos")
+        .insert({
+          device_id: deviceId,
+          ...payload
+        });
+      if (insertError && !isMissingRelationError(insertError)) throw insertError;
+    }
+
+    awaitingServerRecovery = false;
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Falha ao recuperar dispositivo no servidor:", err?.message || err);
+    return false;
+  }
+}
+
 // ===== Service Worker =====
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('service-worker.js')
@@ -4668,6 +4719,7 @@ window.addEventListener("online", () => {
     if (codigoAtual) {
       try {
         const deviceId = gerarDeviceId();
+        await tentarRecuperarDispositivoNoServidor();
         
         // Buscar com device_id para verificar se Ã© o mesmo dispositivo
         let { data, error } = await client
@@ -4743,10 +4795,18 @@ window.addEventListener("online", () => {
       realtimeReady = true;
     }
 
-    if (isPlaying) {
-      pendingResync = true;
-    } else if (codigoAtual) {
-      await carregarConteudo(currentPlaylistId || codigoAtual);
+    if (codigoAtual) {
+      const alvoSync = currentPlaylistId || currentContentCode || codigoAtual;
+
+      if (awaitingServerRecovery || pendingResync || !isPlaying) {
+        pendingResync = false;
+        await carregarConteudo(alvoSync);
+        if (!isPlaying && playlist.length > 0) {
+          tocarLoop();
+        }
+      } else {
+        pendingResync = true;
+      }
     }
   }, 1200);
 });
