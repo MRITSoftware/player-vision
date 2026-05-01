@@ -1441,7 +1441,6 @@ function reapplyActiveMediaFit() {
     const fit = getSmartMediaFit(activeMediaItem, "image", currentItemUrl, img);
     const focus = activeMediaItem.focus || "center center";
     applyFit(img, fit, focus);
-    img.classList.toggle("rotate-for-landscape", shouldRotateImageForLandscape(activeMediaItem, currentItemUrl, img));
   }
 }
 
@@ -1452,25 +1451,6 @@ function pickSourceForOrientation(item) {
     if (reducedSource) return reducedSource;
   }
   return pickSourceForOrientationAndTier(item, "default");
-}
-
-function shouldRotateImageForLandscape(item, selectedUrl, imageEl) {
-  if (ORIENTATION === PHYSICAL_ORIENTATION || !imageEl) return false;
-
-  const landscapeUrl = (item?.urlLandscape || "").trim();
-  if (ORIENTATION === "landscape" && landscapeUrl && selectedUrl === landscapeUrl) return true;
-
-  const portraitUrl = (item?.urlPortrait || "").trim();
-  if (ORIENTATION === "portrait" && portraitUrl && selectedUrl === portraitUrl) return true;
-
-  const naturalWidth = Number(imageEl.naturalWidth || 0);
-  const naturalHeight = Number(imageEl.naturalHeight || 0);
-  if (naturalWidth > 0 && naturalHeight > 0) {
-    const imageOrientation = naturalHeight > naturalWidth ? "portrait" : "landscape";
-    return imageOrientation === ORIENTATION;
-  }
-
-  return false;
 }
 
 // ===== Player =====
@@ -3431,7 +3411,6 @@ async function tocarLoop() {
     const fit = getSmartMediaFit(item, "image", itemUrl, img);
     const focus = item.focus || "center center";
     applyFit(img, fit, focus);
-    img.classList.toggle("rotate-for-landscape", shouldRotateImageForLandscape(item, itemUrl, img));
 
     for (const v of getUniqueVideoEls()) {
       try {
@@ -3469,7 +3448,6 @@ async function tocarLoop() {
   };
 
   img.onerror = () => {
-    img.classList.remove("rotate-for-landscape");
     isPlaying = false;
     registerItemFailure(itemUrl, "image_error");
     proximoItem();
@@ -4526,7 +4504,7 @@ function mostrarLogin() {
   if (img) {
     img.src = "";
     img.removeAttribute("src");
-    img.classList.remove("hidden-ready", "rotate-for-landscape");
+    img.classList.remove("hidden-ready");
     img.style.display = "none";
     img.style.zIndex = "-1";
     img.style.opacity = "0";
