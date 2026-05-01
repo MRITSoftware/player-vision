@@ -469,7 +469,7 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
     // Após primeiro ciclo: permitir cache para melhor performance
     // TV boxes: sempre sem cache (já tratado no plugin nativo)
     const useCache = !isFirstCycle;
-    const fit = FIT_RULES[ORIENTATION]?.video || "contain";
+    const fit = getOrientationFromSelectedSource(item, itemUrl) === ORIENTATION ? "cover" : "contain";
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
     await nativeCallWithTimeout(plugin.play({
@@ -1362,14 +1362,53 @@ function setupOrientationWatcher() {
 }
 
 // ===== Fit rules por orientaÃ§Ã£o/tipo =====
-// Imagens preenchem a tela; videos preservam o quadro inteiro e podem ter faixas.
+// Mesma orientacao preenche a tela; orientacao diferente preserva o quadro inteiro.
 const FIT_RULES = {
-  portrait:  { image: "cover", video: "contain" },
-  landscape: { image: "cover", video: "contain" },
+  portrait:  { image: "cover", video: "cover" },
+  landscape: { image: "cover", video: "cover" },
 };
 function applyFit(el, fit = "cover", pos = "center center") {
   el.style.objectFit = fit;
   el.style.objectPosition = pos;
+}
+
+function getOrientationFromDimensions(width, height) {
+  const w = Number(width || 0);
+  const h = Number(height || 0);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  if (Math.abs(w - h) <= 1) return ORIENTATION;
+  return h > w ? "portrait" : "landscape";
+}
+
+function getOrientationFromSelectedSource(item, selectedUrl) {
+  const url = (selectedUrl || "").trim();
+  if (!url) return null;
+
+  const portraitUrls = [
+    item?.urlPortrait, item?.url_portrait,
+    item?.urlPortraitLow, item?.url_portrait_low,
+    item?.urlPortraitMedium, item?.url_portrait_medium,
+  ].map(value => (value || "").trim()).filter(Boolean);
+  if (portraitUrls.includes(url)) return "portrait";
+
+  const landscapeUrls = [
+    item?.urlLandscape, item?.url_landscape,
+    item?.urlLandscapeLow, item?.url_landscape_low,
+    item?.urlLandscapeMedium, item?.url_landscape_medium,
+  ].map(value => (value || "").trim()).filter(Boolean);
+  if (landscapeUrls.includes(url)) return "landscape";
+
+  return null;
+}
+
+function getSmartMediaFit(item, type, selectedUrl, mediaEl) {
+  const fallback = FIT_RULES[ORIENTATION]?.[type] || "cover";
+  const mediaOrientation =
+    type === "video"
+      ? getOrientationFromDimensions(mediaEl?.videoWidth, mediaEl?.videoHeight) || getOrientationFromSelectedSource(item, selectedUrl)
+      : getOrientationFromDimensions(mediaEl?.naturalWidth, mediaEl?.naturalHeight) || getOrientationFromSelectedSource(item, selectedUrl);
+  if (!mediaOrientation) return fallback;
+  return mediaOrientation === ORIENTATION ? "cover" : "contain";
 }
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
@@ -3158,7 +3197,7 @@ async function tocarLoop() {
       // Garantir início no começo para evitar "fim imediato" em elementos reutilizados.
       try { nextVideo.currentTime = 0; } catch {}
 
-      const fit = FIT_RULES[ORIENTATION]?.video || "contain";
+      const fit = getSmartMediaFit(item, "video", itemUrl, nextVideo);
       const focus = item.focus || "center center";
       applyFit(nextVideo, fit, focus);
 
@@ -3337,7 +3376,7 @@ async function tocarLoop() {
   img.onload = () => {
     if (myToken !== playToken) return;
     stopNativeVideoPlayback().catch(() => {});
-    const fit = item.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
+    const fit = getSmartMediaFit(item, "image", itemUrl, img);
     const focus = item.focus || "center center";
     applyFit(img, fit, focus);
     img.classList.toggle("rotate-for-landscape", shouldRotateImageForLandscape(item, itemUrl, img));
