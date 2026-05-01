@@ -122,11 +122,10 @@
       transform-origin: center center;
     }
 
-    /* Quando o dispositivo estiver em landscape, "vira" o player para ocupar a tela como se fosse vertical.
-       Isso prioriza preencher a altura, aceitando corte em cima/baixo em vez de barras laterais enormes. */
-    html[data-orientation="landscape"] video,
-    html[data-orientation="landscape"] img.rotate-for-landscape {
-      /* Tela fisica horizontal: girar o conteudo para manter exibicao vertical. */
+    /* Quando a orientacao desejada no banco divergir da tela fisica, o player gira o conteudo. */
+    html[data-rotate-content="true"] video,
+    html[data-rotate-content="true"] img.rotate-for-landscape {
+      /* Tela fisica em uma orientacao, conteudo em outra. */
       inset: auto;
       top: 50%;
       left: 50%;

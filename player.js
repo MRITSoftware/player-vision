@@ -68,6 +68,7 @@ let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
 const itemFailureState = new Map();
 const videoCacheRepairState = new Map();
 const VIDEO_DURATION_STORAGE_KEY = "mrit_video_duration_map_v1";
+const DISPLAY_ORIENTATION_STORAGE_KEY = "mrit_display_orientation_v1";
 const VIDEO_STALL_RECACHE_TOLERANCE_SECONDS = 1.5;
 const VIDEO_CACHE_REPAIR_COOLDOWN_MS = 120000;
 let weakDeviceDetected = false;
@@ -1301,18 +1302,50 @@ async function verificarEAtualizarStatusCache() {
 }
 
 // ===== Orientation utils =====
-let ORIENTATION = "landscape"; // default
+let ORIENTATION = "landscape"; // orientacao de exibicao/conteudo
+let PHYSICAL_ORIENTATION = "landscape";
+let DISPLAY_ORIENTATION_SETTING = "auto";
+
+function normalizeOrientationSetting(value) {
+  const normalized = String(value || "auto").trim().toLowerCase();
+  if (["portrait", "vertical", "retrato"].includes(normalized)) return "portrait";
+  if (["landscape", "horizontal", "paisagem"].includes(normalized)) return "landscape";
+  return "auto";
+}
+
 function detectOrientation() {
   const so = (screen.orientation && screen.orientation.type) || "";
   if (so.includes("portrait")) return "portrait";
   if (so.includes("landscape")) return "landscape";
   return (window.innerHeight > window.innerWidth) ? "portrait" : "landscape";
 }
-function applyOrientation(o = detectOrientation()) {
-  ORIENTATION = o;
-  document.documentElement.dataset.orientation = o; // opcional p/ CSS
+function applyOrientation(physical = detectOrientation()) {
+  PHYSICAL_ORIENTATION = physical;
+  ORIENTATION = DISPLAY_ORIENTATION_SETTING === "auto" ? physical : DISPLAY_ORIENTATION_SETTING;
+  document.documentElement.dataset.orientation = ORIENTATION;
+  document.documentElement.dataset.physicalOrientation = PHYSICAL_ORIENTATION;
+  document.documentElement.dataset.orientationSetting = DISPLAY_ORIENTATION_SETTING;
+  document.documentElement.dataset.rotateContent = ORIENTATION !== PHYSICAL_ORIENTATION ? "true" : "false";
+}
+function applyDisplayOrientationSetting(value) {
+  const nextSetting = normalizeOrientationSetting(value);
+  const changed = nextSetting !== DISPLAY_ORIENTATION_SETTING;
+  DISPLAY_ORIENTATION_SETTING = nextSetting;
+  applyOrientation(PHYSICAL_ORIENTATION || detectOrientation());
+  try {
+    localStorage.setItem(DISPLAY_ORIENTATION_STORAGE_KEY, DISPLAY_ORIENTATION_SETTING);
+  } catch {}
+  if (changed) {
+    console.log("Orientacao do display aplicada:", DISPLAY_ORIENTATION_SETTING);
+  }
+  return changed;
 }
 function setupOrientationWatcher() {
+  try {
+    DISPLAY_ORIENTATION_SETTING = normalizeOrientationSetting(localStorage.getItem(DISPLAY_ORIENTATION_STORAGE_KEY));
+  } catch {
+    DISPLAY_ORIENTATION_SETTING = "auto";
+  }
   applyOrientation(detectOrientation());
   if (screen.orientation && screen.orientation.addEventListener) {
     screen.orientation.addEventListener("change", () => applyOrientation(detectOrientation()));
@@ -1349,18 +1382,19 @@ function pickSourceForOrientation(item) {
 }
 
 function shouldRotateImageForLandscape(item, selectedUrl, imageEl) {
-  if (ORIENTATION !== "landscape" || !imageEl) return false;
+  if (ORIENTATION === PHYSICAL_ORIENTATION || !imageEl) return false;
 
   const landscapeUrl = (item?.urlLandscape || "").trim();
-  if (landscapeUrl && selectedUrl === landscapeUrl) return false;
+  if (ORIENTATION === "landscape" && landscapeUrl && selectedUrl === landscapeUrl) return true;
 
   const portraitUrl = (item?.urlPortrait || "").trim();
-  if (portraitUrl && selectedUrl === portraitUrl) return true;
+  if (ORIENTATION === "portrait" && portraitUrl && selectedUrl === portraitUrl) return true;
 
   const naturalWidth = Number(imageEl.naturalWidth || 0);
   const naturalHeight = Number(imageEl.naturalHeight || 0);
   if (naturalWidth > 0 && naturalHeight > 0) {
-    return naturalHeight > naturalWidth;
+    const imageOrientation = naturalHeight > naturalWidth ? "portrait" : "landscape";
+    return imageOrientation === ORIENTATION;
   }
 
   return false;
@@ -1417,11 +1451,20 @@ async function verificarCodigoSalvo() {
           if (codigoField) codigoField.value = codigoDisplay.trim().toUpperCase();
           
           // Verificar se o display ainda existe e se is_locked permite uso
-          const { data: display, error: displayError } = await client
+          let { data: display, error: displayError } = await client
             .from("displays")
-            .select("codigo_unico,is_locked")
+            .select("codigo_unico,is_locked,orientacao")
             .eq("codigo_unico", codigoDisplay)
             .maybeSingle();
+          if (displayError && displayError.message && displayError.message.includes('column') && displayError.message.includes('does not exist')) {
+            const { data: displayBasico } = await client
+              .from("displays")
+              .select("codigo_unico,is_locked")
+              .eq("codigo_unico", codigoDisplay)
+              .maybeSingle();
+            display = displayBasico;
+            displayError = null;
+          }
           
           if (display) {
             // VERIFICAR: Se o cÃ³digo nÃ£o estÃ¡ sendo usado por outro dispositivo
@@ -2301,7 +2344,7 @@ async function iniciar() {
     // Buscar tela com device_id para verificar se Ã© o mesmo dispositivo
     let { data: tela, error } = await client
       .from("displays")
-      .select("codigo_unico,is_locked,codigo_conteudoAtual,device_id")
+      .select("codigo_unico,is_locked,codigo_conteudoAtual,device_id,orientacao")
       .eq("codigo_unico", codigo)
       .maybeSingle();
     
@@ -2322,6 +2365,8 @@ async function iniciar() {
       ensureElementsVisible();
       return;
     }
+
+    applyDisplayOrientationSetting(tela.orientacao);
     
     // Verificar se Ã© o mesmo dispositivo
     const mesmoDispositivo = tela.device_id && tela.device_id === deviceId;
@@ -3885,10 +3930,14 @@ function iniciarRealtime() {
           }
         }
 
+        const orientationChanged = applyDisplayOrientationSetting(payload.new.orientacao);
         const novoCodigo = payload.new.codigo_conteudoAtual;
         if (novoCodigo && novoCodigo !== currentContentCode) {
           console.log("ðŸ”„ ConteÃºdo alterado remotamente:", novoCodigo);
           carregarConteudo(novoCodigo);
+        } else if (orientationChanged && currentContentCode) {
+          console.log("Orientacao alterada remotamente, recarregando conteudo atual");
+          carregarConteudo(currentContentCode);
         }
       }
     )
@@ -4422,7 +4471,7 @@ async function checarLockEConteudo() {
     // Buscar com device_id para verificar se Ã© o mesmo dispositivo
     let { data, error } = await client
       .from("displays")
-      .select("is_locked,codigo_conteudoAtual,device_id")
+      .select("is_locked,codigo_conteudoAtual,device_id,orientacao")
       .eq("codigo_unico", codigoAtual)
       .maybeSingle();
     
@@ -4464,8 +4513,12 @@ async function checarLockEConteudo() {
       return;
     }
 
+    const orientationChanged = applyDisplayOrientationSetting(data.orientacao);
+
     if (data.codigo_conteudoAtual && data.codigo_conteudoAtual !== currentContentCode) {
       await carregarConteudo(data.codigo_conteudoAtual);
+    } else if (orientationChanged && currentContentCode) {
+      await carregarConteudo(currentContentCode);
     }
 
     // Verificar promoÃ§Ã£o continuamente

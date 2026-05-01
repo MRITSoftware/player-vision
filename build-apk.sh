@@ -35,7 +35,7 @@ pwabuilder android \
   --name "MRIT Player" \
   --short-name "MRIT" \
   --display standalone \
-  --orientation portrait \
+  --orientation any \
   --theme-color "#000000" \
   --background-color "#000000" \
   --skipPwaValidation
