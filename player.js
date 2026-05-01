@@ -469,7 +469,7 @@ async function tryPlayWithNativeExo(item, itemUrl, token) {
     // Após primeiro ciclo: permitir cache para melhor performance
     // TV boxes: sempre sem cache (já tratado no plugin nativo)
     const useCache = !isFirstCycle;
-    const fit = item?.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
+    const fit = FIT_RULES[ORIENTATION]?.video || "contain";
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
     await nativeCallWithTimeout(plugin.play({
@@ -1362,10 +1362,10 @@ function setupOrientationWatcher() {
 }
 
 // ===== Fit rules por orientaÃ§Ã£o/tipo =====
-// FULL SCREEN por padrÃ£o: imagem = cover, vÃ­deo = cover.
+// Imagens preenchem a tela; videos preservam o quadro inteiro e podem ter faixas.
 const FIT_RULES = {
-  portrait:  { image: "cover", video: "cover" },
-  landscape: { image: "cover", video: "cover" },
+  portrait:  { image: "cover", video: "contain" },
+  landscape: { image: "cover", video: "contain" },
 };
 function applyFit(el, fit = "cover", pos = "center center") {
   el.style.objectFit = fit;
@@ -3158,7 +3158,7 @@ async function tocarLoop() {
       // Garantir início no começo para evitar "fim imediato" em elementos reutilizados.
       try { nextVideo.currentTime = 0; } catch {}
 
-      const fit = item.fit || (FIT_RULES[ORIENTATION]?.video || "cover");
+      const fit = FIT_RULES[ORIENTATION]?.video || "contain";
       const focus = item.focus || "center center";
       applyFit(nextVideo, fit, focus);
 

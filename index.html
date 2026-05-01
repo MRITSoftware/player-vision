@@ -108,7 +108,7 @@
       width: calc(100vw + 2px);   /* fallback */
       height: calc(100vh + 2px);  /* fallback */
 
-      object-fit: cover;            /* <<< full screen (aceita corte) */
+      object-fit: cover;            /* fallback ate o JS aplicar a regra do tipo */
       object-position: center center;
       background: #000;
       border: 0;
@@ -121,6 +121,8 @@
       transition: opacity 0.1s ease-in-out;
       transform-origin: center center;
     }
+    video { object-fit: contain; }
+    img { object-fit: cover; }
 
     /* Quando a orientacao desejada no banco divergir da tela fisica, o player gira o conteudo. */
     html[data-rotate-content="true"] video,
