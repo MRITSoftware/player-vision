@@ -123,6 +123,13 @@
     }
     video { object-fit: cover; }
     img { object-fit: cover; }
+    body[data-player-mode="login"] video,
+    body[data-player-mode="login"] #imgPlayer {
+      display: none !important;
+      opacity: 0 !important;
+      visibility: hidden !important;
+      z-index: -1 !important;
+    }
 
     /* Quando a orientacao desejada no banco divergir da tela fisica, o player gira o conteudo. */
     html[data-rotate-content="true"] video,
@@ -149,7 +156,7 @@
     img { image-orientation: from-image; }
   </style>
 </head>
-<body>
+<body data-player-mode="login">
   <!-- Logo fixo -->
   <img id="logo" src="vision_logo.png" alt="Logo Vision" />
 

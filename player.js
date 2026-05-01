@@ -65,6 +65,8 @@ let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
+let activeMediaItem = null;
+let activeMediaType = null;
 const itemFailureState = new Map();
 const videoCacheRepairState = new Map();
 const VIDEO_DURATION_STORAGE_KEY = "mrit_video_duration_map_v1";
@@ -401,6 +403,12 @@ function isNativeMediaModeActive() {
   return isNativeAndroid() && isNativeExoEnabled() && NATIVE_ANDROID_NATIVE_MEDIA_ONLY;
 }
 
+function setPlayerMode(mode) {
+  if (document.body) {
+    document.body.dataset.playerMode = mode;
+  }
+}
+
 async function ensureNativeExoListener() {
   if (!isNativeExoEnabled()) return;
   const plugin = getNativeExoPlugin();
@@ -503,7 +511,8 @@ async function tryShowImageNative(item, itemUrl, token) {
   if (!plugin) return false;
   try {
     await ensureNativeExoListener();
-    const fit = item?.fit || (FIT_RULES[ORIENTATION]?.image || "cover");
+    const sourceOrientation = getOrientationFromSelectedSource(item, itemUrl);
+    const fit = sourceOrientation ? (sourceOrientation === ORIENTATION ? "cover" : "contain") : (FIT_RULES[ORIENTATION]?.image || "cover");
     nativeExoPendingToken = token;
     nativeExoPendingUrl = itemUrl;
     await nativeCallWithTimeout(plugin.showImage({
@@ -1326,6 +1335,7 @@ function applyOrientation(physical = detectOrientation()) {
   document.documentElement.dataset.physicalOrientation = PHYSICAL_ORIENTATION;
   document.documentElement.dataset.orientationSetting = DISPLAY_ORIENTATION_SETTING;
   document.documentElement.dataset.rotateContent = ORIENTATION !== PHYSICAL_ORIENTATION ? "true" : "false";
+  reapplyActiveMediaFit();
 }
 function applyDisplayOrientationSetting(value) {
   const nextSetting = normalizeOrientationSetting(value);
@@ -1409,6 +1419,30 @@ function getSmartMediaFit(item, type, selectedUrl, mediaEl) {
       : getOrientationFromDimensions(mediaEl?.naturalWidth, mediaEl?.naturalHeight) || getOrientationFromSelectedSource(item, selectedUrl);
   if (!mediaOrientation) return fallback;
   return mediaOrientation === ORIENTATION ? "cover" : "contain";
+}
+
+function getVisibleVideoEl() {
+  return getUniqueVideoEls().find(v => v && v.style.display !== "none") || video;
+}
+
+function reapplyActiveMediaFit() {
+  if (!activeMediaItem || !activeMediaType || !currentItemUrl) return;
+
+  if (activeMediaType === "video") {
+    const videoEl = getVisibleVideoEl();
+    if (!videoEl) return;
+    const fit = getSmartMediaFit(activeMediaItem, "video", currentItemUrl, videoEl);
+    const focus = activeMediaItem.focus || "center center";
+    applyFit(videoEl, fit, focus);
+    return;
+  }
+
+  if (activeMediaType === "image" && img) {
+    const fit = getSmartMediaFit(activeMediaItem, "image", currentItemUrl, img);
+    const focus = activeMediaItem.focus || "center center";
+    applyFit(img, fit, focus);
+    img.classList.toggle("rotate-for-landscape", shouldRotateImageForLandscape(activeMediaItem, currentItemUrl, img));
+  }
 }
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
@@ -2004,7 +2038,7 @@ async function iniciar() {
         .select("codigo_unico, nome")
         .eq("codigo_unico", codigo)
         .maybeSingle();
-      
+
       if (displayError) {
         console.error("âŒ Erro ao buscar display:", displayError);
         if (hasCachedPlaylist) {
@@ -2017,7 +2051,7 @@ async function iniciar() {
           return;
         }
       }
-      
+
       if (!display && !forceOfflineStartup) {
         if (hasCachedPlaylist) {
           console.warn("Display nao confirmado no servidor. Seguindo com cache salvo.");
@@ -2029,7 +2063,7 @@ async function iniciar() {
           return;
         }
       }
-      
+
       if (!forceOfflineStartup) {
         local = display.nome || codigo; // Usa o nome do display, ou o cÃ³digo como fallback
         console.log("âœ… Display encontrado:", display.nome);
@@ -2357,14 +2391,15 @@ async function iniciar() {
         });
         console.log("ðŸ“¦ Namespace configurado no Service Worker (offline):", codigoAtual);
       }
-      
+
       // Configurar realtime se for playlist
       if (currentPlaylistId) {
         subscribePlaylistChannel(currentPlaylistId);
       } else {
         subscribePlaylistChannel(null);
       }
-      
+
+      setPlayerMode("playback");
       document.getElementById("codigoInput").style.display = "none";
       console.log("ðŸ“¦ Modo offline - usando cache da playlist:", playlist.length, "itens");
       tocarLoop();
@@ -2485,6 +2520,8 @@ async function iniciar() {
     inputDiv.classList.add("fade-out");
     rodape.classList.add("fade-out");
     logo.classList.add("fade-out");
+
+    setPlayerMode("playback");
 
     // informa o namespace (cÃ³digo da tela) ao service worker
     if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -2811,6 +2848,8 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     video.style.display = "none";
     img.style.display = "none";
     currentItemUrl = null;
+    activeMediaItem = null;
+    activeMediaType = null;
     currentIndex = 0;
     // Playlist vazia = cache nÃ£o pronto
     await atualizarStatusCache(codigoAtual, false);
@@ -2878,7 +2917,9 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
   isPlaying = false;
   currentItemUrl = null;
-  
+  activeMediaItem = null;
+  activeMediaType = null;
+
   // Garantir que currentIndex esteja dentro dos limites vÃ¡lidos
   // Se o item atual foi removido, avanÃ§ar para o prÃ³ximo item vÃ¡lido
   if (playlist.length > 0) {
@@ -2982,6 +3023,8 @@ async function limparCacheAtualEReload() {
   isPlaying = false;
   isLoadingVideo = false;
   currentItemUrl = null;
+  activeMediaItem = null;
+  activeMediaType = null;
   preloadedBufferUrl = null;
   preloadingBuffer = false;
   playToken++;
@@ -3084,6 +3127,8 @@ async function tocarLoop() {
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
   const isVideo = isVideoItem(item, itemUrl);
+  activeMediaItem = item;
+  activeMediaType = isVideo ? "video" : "image";
   const preferLocalCachePlayback = !navigator.onLine || !navigator.serviceWorker.controller;
 
   const myToken = ++playToken;
@@ -3187,6 +3232,12 @@ async function tocarLoop() {
       nextVideo.addEventListener("loadedmetadata", persistVideoDuration, { once: true });
       nextVideo.addEventListener("durationchange", persistVideoDuration, { once: true });
       persistVideoDuration();
+      const reapplyVideoFitWhenDimensionsChange = () => {
+        if (myToken !== playToken || videoToken !== currentVideoToken) return;
+        reapplyActiveMediaFit();
+      };
+      nextVideo.addEventListener("loadedmetadata", reapplyVideoFitWhenDimensionsChange, { once: true });
+      nextVideo.addEventListener("resize", reapplyVideoFitWhenDimensionsChange, { once: true });
 
       if (myToken !== playToken || videoToken !== currentVideoToken) {
         isLoadingVideo = false;
@@ -3205,6 +3256,7 @@ async function tocarLoop() {
       img.src = "";
 
       nextVideo.style.display = "block";
+      nextVideo.style.visibility = "visible";
       nextVideo.classList.add("hidden-ready");
       nextVideo.style.opacity = "0";
 
@@ -3397,6 +3449,7 @@ async function tocarLoop() {
     stopPlaybackWatchdog();
 
     img.style.display = "block";
+    img.style.visibility = "visible";
     img.classList.remove("hidden-ready");
     img.style.opacity = "1";
     clearItemFailure(itemUrl);
@@ -4246,6 +4299,8 @@ async function pararTudoMostrarLogin() {
   playlist = [];
   currentIndex = 0;
   currentItemUrl = null;
+  activeMediaItem = null;
+  activeMediaType = null;
   isPlaying = false;
   
   // Limpar promoÃ§Ã£o
@@ -4434,6 +4489,8 @@ function stopFullscreenMonitoring() {
 }
 
 function mostrarLogin() {
+  setPlayerMode("login");
+
   // Parar monitoramento de fullscreen
   stopFullscreenMonitoring();
   
@@ -4453,15 +4510,27 @@ function mostrarLogin() {
   // Garantir que vÃ­deos e imagem estejam escondidos e com z-index baixo
   const img = document.getElementById("imgPlayer");
   for (const v of getUniqueVideoEls()) {
+    try {
+      v.pause();
+      v.currentTime = 0;
+      revokeElementObjectUrl(v);
+      v.removeAttribute("src");
+      v.load();
+    } catch {}
     v.style.display = "none";
     v.style.zIndex = "-1";
     v.style.opacity = "0";
-    try { v.pause(); } catch {}
+    v.style.visibility = "hidden";
+    v.classList.remove("hidden-ready");
   }
   if (img) {
+    img.src = "";
+    img.removeAttribute("src");
+    img.classList.remove("hidden-ready", "rotate-for-landscape");
     img.style.display = "none";
     img.style.zIndex = "-1";
     img.style.opacity = "0";
+    img.style.visibility = "hidden";
   }
   
   // Aguardar um pouco para garantir que fullscreen saiu
