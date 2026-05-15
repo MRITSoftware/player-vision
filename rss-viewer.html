@@ -159,6 +159,7 @@
     <div class="spinner"></div>
     <span id="overlay-text">Carregando…</span>
   </div>
+  <div id="diag" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:999;color:#ff0;font-size:2rem;font-weight:900;text-align:center;pointer-events:none"></div>
 
   <div id="header">
     <span id="header-title">Informativo</span>
@@ -370,6 +371,7 @@
         } else {
           const ov = document.getElementById('overlay');
           ov.innerHTML = `<span style="color:#e55;font-size:.9rem">Sem conexão e sem cache</span>`;
+          const _d = document.getElementById('diag'); if (_d) _d.textContent = '❌ SEM CACHE: ' + String(err);
         }
       }
     }
@@ -394,7 +396,19 @@
       }
     });
 
-    loadFeed();
+    // ── DIAGNÓSTICO TEMPORÁRIO ──
+    const diag = document.getElementById('diag');
+    diag.textContent = '⚡ IFRAME OK';
+    setTimeout(() => {
+      diag.textContent = 'Buscando notícias...';
+    }, 500);
+
+    loadFeed().then(() => {
+      diag.textContent = items.length ? `✅ ${items.length} notícias` : '❌ 0 notícias';
+      setTimeout(() => { diag.textContent = ''; }, 3000);
+    }).catch(e => {
+      diag.textContent = '❌ ERRO: ' + e;
+    });
   </script>
 </body>
 </html>
