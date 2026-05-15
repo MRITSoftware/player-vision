@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MRIT Feed</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      font-family: 'Segoe UI', sans-serif;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #carousel {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transition: opacity 0.9s ease;
+      pointer-events: none;
+    }
+    .slide.active { opacity: 1; pointer-events: auto; }
+
+    .slide-bg {
+      position: absolute;
+      inset: 0;
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-color: #111;
+    }
+    .slide-bg::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        to bottom,
+        rgba(0,0,0,0.08) 0%,
+        rgba(0,0,0,0.10) 40%,
+        rgba(0,0,0,0.80) 62%,
+        rgba(0,0,0,0.97) 100%
+      );
+    }
+    .slide-no-image .slide-bg {
+      background: linear-gradient(160deg, #0a2a5e 0%, #041226 100%);
+    }
+
+    .slide-content {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 28px 26px 52px;
+      z-index: 2;
+    }
+    .slide-tag {
+      display: inline-block;
+      background: #f5a623;
+      color: #000;
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 3px;
+      margin-bottom: 14px;
+    }
+    .slide-title {
+      font-size: 1.85rem;
+      font-weight: 800;
+      color: #fff;
+      line-height: 1.2;
+      margin-bottom: 14px;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+    }
+    .slide-desc {
+      font-size: 0.9rem;
+      color: #ccc;
+      line-height: 1.6;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .slide-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .slide-source { font-size: 0.7rem; font-weight: 700; color: #f5a623; text-transform: uppercase; letter-spacing: 1px; }
+    .slide-date   { font-size: 0.7rem; color: #666; }
+
+    #progress-bar {
+      position: fixed;
+      bottom: 0; left: 0;
+      height: 4px;
+      background: #f5a623;
+      width: 0%;
+      z-index: 20;
+      transition: width linear;
+    }
+
+    #dots {
+      position: fixed;
+      top: 50%; right: 16px;
+      transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 10px;
+      z-index: 20;
+    }
+    .dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: rgba(255,255,255,0.25);
+      transition: background 0.3s, transform 0.3s;
+    }
+    .dot.active { background: #f5a623; transform: scale(1.6); }
+
+    #header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      padding: 18px 22px;
+      display: flex; align-items: center; justify-content: space-between;
+      z-index: 20;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    }
+    #header-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 2px; color: rgba(255,255,255,0.5); text-transform: uppercase; }
+    #header-clock { font-size: 0.72rem; color: rgba(255,255,255,0.35); font-variant-numeric: tabular-nums; }
+
+    #overlay {
+      position: fixed; inset: 0;
+      background: #000;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+      z-index: 99;
+    }
+    #overlay-text { color: #555; font-size: 0.88rem; letter-spacing: 1px; }
+    .spinner {
+      width: 34px; height: 34px;
+      border: 3px solid #1a1a1a; border-top-color: #f5a623;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #refresh-badge {
+      position: fixed; bottom: 12px; left: 16px;
+      font-size: 0.6rem; color: #333; letter-spacing: 0.5px; z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="spinner"></div>
+    <span id="overlay-text">Carregando…</span>
+  </div>
+
+  <div id="header">
+    <span id="header-title">Informativo</span>
+    <span id="header-clock"></span>
+  </div>
+
+  <div id="dots"></div>
+  <div id="carousel"></div>
+  <div id="progress-bar"></div>
+  <div id="refresh-badge"></div>
+
+  <script>
+    // ── Params via URL (player passa ao abrir o iframe) ──
+    const params       = new URLSearchParams(location.search);
+    const QUERY        = params.get('query')    || 'futebol';
+    const MAX_SLIDES   = Math.max(1, parseInt(params.get('slides'))   || 3);
+    const SLIDE_TIME   = Math.max(3000, parseInt(params.get('duration')) || 7000); // ms por slide
+    const API_BASE     = params.get('api') || ''; // URL da Edge Function
+    const REFRESH_TIME = 15 * 60 * 1000;
+    const CACHE_KEY    = `mrit_feed_cache_${QUERY.replace(/\s+/g, '_')}`;
+
+    let current      = 0;
+    let slidesShown  = 0;
+    let items        = [];
+    let slideTimer   = null;
+    let refreshTimer = null;
+    let refreshAt    = null;
+
+    document.getElementById('header-title').textContent =
+      QUERY.charAt(0).toUpperCase() + QUERY.slice(1);
+
+    // ── Relógio ──
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('header-clock').textContent =
+        now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // ── Contador de próxima atualização ──
+    function updateRefreshBadge() {
+      if (!refreshAt) return;
+      const diff = Math.max(0, Math.round((refreshAt - Date.now()) / 1000));
+      const m = String(Math.floor(diff / 60)).padStart(2, '0');
+      const s = String(diff % 60).padStart(2, '0');
+      document.getElementById('refresh-badge').textContent = `próxima atualização: ${m}:${s}`;
+    }
+    setInterval(updateRefreshBadge, 1000);
+
+    function formatDate(str) {
+      if (!str) return '';
+      return new Date(str).toLocaleDateString('pt-BR', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+      });
+    }
+
+    // ── Cache offline ──
+    function salvarCache(articles) {
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), articles })); } catch {}
+    }
+    function carregarCache() {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const { articles } = JSON.parse(raw);
+        return Array.isArray(articles) && articles.length ? articles : null;
+      } catch { return null; }
+    }
+    function limparCache() {
+      try { localStorage.removeItem(CACHE_KEY); } catch {}
+    }
+
+    // ── Build slides ──
+    function buildSlides(articlesInput) {
+      // Limitar ao máximo configurado pelo player
+      const limited = articlesInput.slice(0, MAX_SLIDES);
+      const carousel = document.getElementById('carousel');
+      const dots     = document.getElementById('dots');
+      carousel.innerHTML = '';
+      dots.innerHTML     = '';
+      current     = 0;
+      slidesShown = 0;
+
+      limited.forEach((item, i) => {
+        const hasImage = !!(item.image_url && item.image_url.startsWith('http'));
+        const slide = document.createElement('div');
+        slide.className = 'slide' + (hasImage ? '' : ' slide-no-image');
+        if (i === 0) slide.classList.add('active');
+
+        slide.innerHTML = `
+          <div class="slide-bg" ${hasImage ? `style="background-image:url('${item.image_url}')"` : ''}></div>
+          <div class="slide-content">
+            <div class="slide-tag">${QUERY.charAt(0).toUpperCase() + QUERY.slice(1)}</div>
+            <div class="slide-title">${(item.title || '').replace(/\s*-\s*[^-]+$/, '')}</div>
+            ${item.description ? `<div class="slide-desc">${item.description}</div>` : ''}
+            <div class="slide-meta">
+              <span class="slide-source">${item.source_name || 'Notícia'}</span>
+              <span class="slide-date">${formatDate(item.pubDate)}</span>
+            </div>
+          </div>`;
+        carousel.appendChild(slide);
+
+        const dot = document.createElement('div');
+        dot.className = 'dot' + (i === 0 ? ' active' : '');
+        dots.appendChild(dot);
+      });
+
+      items = limited;
+    }
+
+    function goTo(index) {
+      const slides = document.querySelectorAll('.slide');
+      const dots   = document.querySelectorAll('.dot');
+      if (!slides.length) return;
+      slides[current].classList.remove('active');
+      dots[current]  .classList.remove('active');
+      current = (index + items.length) % items.length;
+      slides[current].classList.add('active');
+      dots[current]  .classList.add('active');
+      startProgress();
+    }
+
+    function next() {
+      slidesShown++;
+      // Quando exibiu MAX_SLIDES, avisa o player que terminou
+      if (slidesShown >= MAX_SLIDES) {
+        window.parent?.postMessage({ action: 'feedDone' }, '*');
+        clearTimeout(slideTimer);
+        return;
+      }
+      goTo(current + 1);
+    }
+
+    function startProgress() {
+      const bar = document.getElementById('progress-bar');
+      bar.style.transition = 'none';
+      bar.style.width = '0%';
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        bar.style.transition = `width ${SLIDE_TIME}ms linear`;
+        bar.style.width = '100%';
+      }));
+      clearTimeout(slideTimer);
+      slideTimer = setTimeout(next, SLIDE_TIME);
+    }
+
+    function restart(newSlides, newDuration) {
+      // Chamado via postMessage quando o player reutiliza o iframe
+      if (newSlides)   MAX_SLIDES_RUNTIME = newSlides;
+      if (newDuration) SLIDE_TIME_RUNTIME  = newDuration;
+      clearTimeout(slideTimer);
+      slidesShown = 0;
+      if (items.length) { goTo(0); }
+    }
+
+    // Aliases mutáveis para restart dinâmico
+    let MAX_SLIDES_RUNTIME = MAX_SLIDES;
+    let SLIDE_TIME_RUNTIME = SLIDE_TIME;
+
+    // ── Fetch ──
+    async function buildApiUrl() {
+      if (API_BASE) {
+        return `${API_BASE}?query=${encodeURIComponent(QUERY)}&language=pt&category=sports`;
+      }
+      // Fallback direto (sem Edge Function) — só para desenvolvimento local
+      return null;
+    }
+
+    async function loadFeed(showOverlay = true) {
+      if (showOverlay) {
+        const ov = document.getElementById('overlay');
+        ov.innerHTML = '<div class="spinner"></div><span id="overlay-text">Carregando…</span>';
+        ov.style.display = 'flex';
+      }
+
+      try {
+        const url = await buildApiUrl();
+        if (!url) throw new Error('Edge Function não configurada');
+
+        const res  = await fetch(url);
+        const data = await res.json();
+        if (data.status !== 'success') throw new Error(data.results?.message || 'Erro na API');
+
+        const articles = (data.results || []).filter(a => a.title);
+        if (!articles.length) throw new Error('Nenhum resultado');
+
+        salvarCache(articles);
+        buildSlides(articles);
+        document.getElementById('overlay').style.display = 'none';
+        slidesShown = 0;
+        startProgress();
+
+        clearTimeout(refreshTimer);
+        refreshAt    = Date.now() + REFRESH_TIME;
+        refreshTimer = setTimeout(() => loadFeed(false), REFRESH_TIME);
+
+      } catch (err) {
+        // Tentar cache offline
+        const cached = carregarCache();
+        if (cached) {
+          buildSlides(cached);
+          document.getElementById('overlay').style.display = 'none';
+          slidesShown = 0;
+          startProgress();
+
+          clearTimeout(refreshTimer);
+          refreshAt    = Date.now() + REFRESH_TIME;
+          refreshTimer = setTimeout(() => loadFeed(false), REFRESH_TIME);
+        } else {
+          const ov = document.getElementById('overlay');
+          ov.innerHTML = `<span style="color:#e55;font-size:.9rem">Sem conexão e sem cache</span>`;
+        }
+      }
+    }
+
+    // ── postMessage: player controla o iframe ──
+    window.addEventListener('message', (e) => {
+      const { action, slides, duration } = e.data || {};
+      if (action === 'restart') {
+        if (slides)   MAX_SLIDES_RUNTIME = slides;
+        if (duration) SLIDE_TIME_RUNTIME  = duration;
+        clearTimeout(slideTimer);
+        slidesShown = 0;
+        if (items.length) {
+          buildSlides(items); // reconstrói com novo limite
+          startProgress();
+        } else {
+          loadFeed();
+        }
+      }
+      if (action === 'clearCache') {
+        limparCache();
+      }
+    });
+
+    loadFeed();
+  </script>
+</body>
+</html>

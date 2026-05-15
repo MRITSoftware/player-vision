@@ -64,6 +64,7 @@ let lastFailedRetries = 0;
 let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
+let feedTimer = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
 let activeMediaItem = null;
 let activeMediaType = null;
@@ -1446,6 +1447,10 @@ function reapplyActiveMediaFit() {
 
 // (Opcional) Se tiver urls especÃ­ficas por orientaÃ§Ã£o no item
 function pickSourceForOrientation(item) {
+  if ((item && item.tipo || '').toLowerCase() === 'feed') {
+    var fq = (item.feed_query || 'futebol').replace(/\s+/g, '_');
+    return 'feed:' + fq;
+  }
   if (shouldPreferReducedMedia()) {
     const reducedSource = pickSourceForOrientationAndTier(item, "low");
     if (reducedSource) return reducedSource;
@@ -2149,6 +2154,7 @@ async function iniciar() {
   
   codigoAtual = codigo;
   awaitingServerRecovery = false;
+  iniciarPollScreenshot();
   
   // Configurar namespace no Service Worker IMEDIATAMENTE para usar cache correto
   if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
@@ -3066,6 +3072,7 @@ async function tocarLoop() {
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+  if (feedTimer) { clearTimeout(feedTimer); feedTimer = null; var _ff = document.getElementById('feedPlayer'); if (_ff) _ff.style.display = 'none'; }
   if (!isNativeMediaModeActive()) {
     await stopNativeVideoPlayback();
   }
@@ -3104,6 +3111,17 @@ async function tocarLoop() {
   }
 
   currentItemUrl = itemUrl;
+
+  // -- Feed (informativo) --
+  if ((item && item.tipo || '').toLowerCase() === 'feed') {
+    activeMediaItem = item;
+    activeMediaType = 'feed';
+    for (var _fv of getUniqueVideoEls()) _fv.style.display = 'none';
+    img.style.display = 'none';
+    var _feedToken = ++playToken;
+    tocarFeedItem(item, _feedToken);
+    return;
+  }
 
   const isHls = /\.m3u8(\?|$)/i.test(itemUrl);
   const isVideo = isVideoItem(item, itemUrl);
@@ -4249,6 +4267,9 @@ async function pararTudoMostrarLogin() {
   preloadedBufferUrl = null;
   preloadingBuffer = false;
   stopPlaybackWatchdog();
+  pararPollScreenshot();
+  if (feedTimer) { clearTimeout(feedTimer); feedTimer = null; }
+  var _feedEl = document.getElementById('feedPlayer'); if (_feedEl) _feedEl.style.display = 'none';
   isLoadingVideo = false;
   playToken++;
   currentVideoToken++;
@@ -4838,6 +4859,7 @@ if ('serviceWorker' in navigator) {
           // Atualizar status do cache no banco
           if (codigoAtual) {
             atualizarStatusCache(codigoAtual, true);
+            agendarVerificacaoIntegridade();
           }
         }
       });
@@ -6161,3 +6183,215 @@ window.mritDebug = {
 };
 
 
+
+
+// ===== Cache Integrity Check =====
+// Roda 45s após o cache ser atualizado pelo SW.
+// Para cada vídeo em cache, tenta decodificar o blob com um elemento <video>.
+// Se a duração retornar null, o blob está corrompido/incompleto — remove e pede recache.
+const CACHE_INTEGRITY_CHECK_DELAY_MS = 45000;
+const CACHE_INTEGRITY_MIN_DURATION_S = 0.5;
+let cacheIntegrityTimer = null;
+
+function agendarVerificacaoIntegridade() {
+  if (cacheIntegrityTimer) clearTimeout(cacheIntegrityTimer);
+  cacheIntegrityTimer = setTimeout(verificarIntegridadeCache, CACHE_INTEGRITY_CHECK_DELAY_MS);
+}
+
+async function verificarIntegridadeCache() {
+  if (!codigoAtual || !playlist || playlist.length === 0) return;
+
+  const urlsParaRefazer = [];
+
+  for (const item of playlist) {
+    const url = pickSourceForOrientation(item);
+    if (!/\.(mp4|webm|mkv|mov|avi|m4v|3gp)(\?|$)/i.test(url)) continue;
+
+    let blob;
+    try { blob = await idbGet(`${codigoAtual}::${url}`); } catch { continue; }
+    if (!blob || blob.size === 0) continue; // não cacheado ainda, SW cuida disso
+
+    const duration = await readVideoDurationFromBlob(blob);
+    if (duration === null || duration < CACHE_INTEGRITY_MIN_DURATION_S) {
+      console.warn('[cache-integrity] Blob inválido detectado — removendo para recache:', url,
+        '| tamanho:', blob.size, 'bytes | duração decodificada:', duration);
+      await deleteCachedVideoEntries(url);
+      urlsParaRefazer.push(url);
+    }
+
+    // Pausa entre verificações para não bloquear a thread de UI
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  if (urlsParaRefazer.length === 0) {
+    console.log('[cache-integrity] Todos os vídeos em cache verificados e válidos.');
+    return;
+  }
+
+  console.warn('[cache-integrity]', urlsParaRefazer.length, 'vídeo(s) corrompido(s) removido(s) — solicitando recache ao SW');
+  const itens = playlist.filter(item => urlsParaRefazer.includes(pickSourceForOrientation(item)));
+  navigator.serviceWorker?.controller?.postMessage({ action: 'updateCache', playlist: itens });
+}
+
+// ===== Remote Screenshot =====
+// O painel seta screenshot_pending = true na tabela displays.
+// O player detecta a flag a cada 6s, captura o frame atual via canvas, envia ao Supabase Storage
+// e grava screenshot_url + screenshot_at de volta na tabela.
+const SCREENSHOT_POLL_MS = 6000;
+let screenshotPollTimer = null;
+
+function iniciarPollScreenshot() {
+  pararPollScreenshot();
+  screenshotPollTimer = setInterval(verificarScreenshotPendente, SCREENSHOT_POLL_MS);
+}
+
+function pararPollScreenshot() {
+  if (screenshotPollTimer) { clearInterval(screenshotPollTimer); screenshotPollTimer = null; }
+}
+
+async function verificarScreenshotPendente() {
+  if (!codigoAtual || !navigator.onLine) return;
+  try {
+    const { data, error } = await client
+      .from('displays')
+      .select('screenshot_pending')
+      .eq('codigo_unico', codigoAtual)
+      .maybeSingle();
+    if (!error && data?.screenshot_pending) await processarSolicitacaoScreenshot();
+  } catch {}
+}
+
+async function capturarScreenshot() {
+  const width = window.innerWidth || 1920;
+  const height = window.innerHeight || 1080;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, width, height);
+
+  let captured = false;
+  try {
+    if (activeMediaType === 'video') {
+      const activeVid = getUniqueVideoEls().find(v => v.style.display !== 'none' && v.readyState >= 2);
+      if (activeVid) { ctx.drawImage(activeVid, 0, 0, width, height); captured = true; }
+    } else if (activeMediaType === 'image' && img?.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, 0, 0, width, height);
+      captured = true;
+    }
+  } catch (e) {
+    console.warn('[screenshot] Não foi possível capturar mídia ativa:', e.message);
+  }
+
+  if (!captured) {
+    // Fallback: tela escura com código e timestamp (ex: player nativo ExoPlayer)
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#58a6ff';
+    ctx.font = 'bold 52px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(codigoAtual || 'MRIT Vision', width / 2, height / 2 - 28);
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '26px sans-serif';
+    ctx.fillText(new Date().toLocaleString('pt-BR'), width / 2, height / 2 + 36);
+  }
+
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.75));
+}
+
+async function processarSolicitacaoScreenshot() {
+  try {
+    // Reset imediato da flag para evitar duplo processamento
+    await client.from('displays')
+      .update({ screenshot_pending: false })
+      .eq('codigo_unico', codigoAtual);
+
+    const blob = await capturarScreenshot();
+    if (!blob) return;
+
+    // Sobrescreve sempre o mesmo arquivo por tela (latest.jpg) para economizar storage
+    const filename = `${codigoAtual}/latest.jpg`;
+    const { error: uploadError } = await client.storage
+      .from('screenshots')
+      .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
+
+    if (uploadError) {
+      console.warn('[screenshot] Erro ao enviar para storage:', uploadError.message);
+      return;
+    }
+
+    const { data: urlData } = client.storage.from('screenshots').getPublicUrl(filename);
+    // Timestamp na URL para forçar reload no painel (evita cache do browser)
+    const publicUrl = urlData?.publicUrl ? `${urlData.publicUrl}?t=${Date.now()}` : null;
+
+    await client.from('displays').update({
+      screenshot_url: publicUrl,
+      screenshot_at: new Date().toISOString()
+    }).eq('codigo_unico', codigoAtual);
+
+    console.log('[screenshot] Capturado e enviado:', publicUrl);
+  } catch (err) {
+    console.error('[screenshot] Erro ao processar screenshot:', err?.message);
+  }
+}
+// ===== Feed Item (tipo: "feed") =====
+// Exibe o iframe rss-viewer.html com os parâmetros do item da playlist.
+// O iframe fica pré-carregado em background; quando o mesmo feed é exibido novamente
+// apenas envia postMessage 'restart' em vez de recarregar a página.
+async function tocarFeedItem(item, token) {
+  const feedFrame = document.getElementById('feedPlayer');
+  if (!feedFrame) { proximoItem(); return; }
+
+  const query         = item.feed_query         || 'futebol';
+  const slides        = Math.max(1, parseInt(item.feed_slides)          || 3);
+  const slideDuration = Math.max(3, parseInt(item.feed_slide_duration)  || 7);
+  const totalMs       = slides * slideDuration * 1000;
+  const edgeUrl       = supabaseUrl + '/functions/v1/news-feed';
+
+  const prevQuery = feedFrame.getAttribute('data-feed-query');
+  const isLoaded  = prevQuery !== null && feedFrame.src && feedFrame.src !== 'about:blank';
+
+  if (isLoaded && prevQuery === query) {
+    // Mesmo feed já carregado: só reseta o carrossel
+    feedFrame.contentWindow &&
+      feedFrame.contentWindow.postMessage({ action: 'restart', slides, duration: slideDuration * 1000 }, '*');
+  } else {
+    // Feed diferente ou primeira carga
+    const src = 'rss-viewer.html'
+      + '?query='    + encodeURIComponent(query)
+      + '&slides='   + slides
+      + '&duration=' + (slideDuration * 1000)
+      + '&api='      + encodeURIComponent(edgeUrl);
+    feedFrame.src = src;
+    feedFrame.setAttribute('data-feed-query', query);
+  }
+
+  feedFrame.style.display = 'block';
+  isPlaying = true;
+
+  // Timer de segurança: garante avanço mesmo se o iframe travar
+  feedTimer = setTimeout(function () {
+    if (playToken !== token) return;
+    feedFrame.style.display = 'none';
+    isPlaying = false;
+    feedTimer = null;
+    proximoItem();
+  }, totalMs + 2000); // +2s de folga
+
+  // Escuta sinal "feedDone" do rss-viewer (quando exibiu todos os slides)
+  function onFeedDone(e) {
+    if (e.data && e.data.action === 'feedDone') {
+      window.removeEventListener('message', onFeedDone);
+      if (playToken !== token) return;
+      clearTimeout(feedTimer);
+      feedTimer = null;
+      feedFrame.style.display = 'none';
+      isPlaying = false;
+      proximoItem();
+    }
+  }
+  window.addEventListener('message', onFeedDone);
+}
