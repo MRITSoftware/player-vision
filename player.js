@@ -68,6 +68,7 @@ let feedTimer        = null;
 let feedSlideTimer   = null;
 let feedClockInt     = null;
 let feedItems        = [];
+let feedArticlesFull = [];
 let feedCurrent      = 0;
 let feedSlidesShown  = 0;
 let feedCurrentQuery = null;
@@ -6492,11 +6493,11 @@ async function tocarFeedItem(item, token) {
     feedFechar(); isPlaying = false; proximoItem();
   }, slides * slideDuration * 1000 + 3000);
 
-  // Reusar cache do mesmo query
-  if (feedCurrentQuery === query && feedItems.length > 0) {
+  // Reusar artigos em memória do mesmo query (usa lista completa para respeitar novo slides)
+  if (feedCurrentQuery === query && feedArticlesFull.length > 0) {
     var ov0 = document.getElementById('feed-overlay');
     if (ov0) ov0.style.display = 'none';
-    _feedConstruirSlides(feedItems, slides, query);
+    _feedConstruirSlides(feedArticlesFull, slides, query);
     _feedStartProgress(slideDuration, slides, token);
     return;
   }
@@ -6520,6 +6521,7 @@ async function tocarFeedItem(item, token) {
   if (playToken !== token) return;
 
   if (articles && articles.length) {
+    feedArticlesFull = articles;
     _feedConstruirSlides(articles, slides, query);
     if (ov) ov.style.display = 'none';
     _feedStartProgress(slideDuration, slides, token);
