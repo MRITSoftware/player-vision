@@ -154,6 +154,95 @@
 
     /* Respeita rotação EXIF de fotos verticais */
     img { image-orientation: from-image; }
+
+    /* ── Feed de informativos (overlay inline, sem iframe) ── */
+    #feedPlayer {
+      display: none; position: fixed; inset: 0; z-index: 5;
+      background: #000; overflow: hidden;
+      font-family: 'Segoe UI', Arial, sans-serif;
+    }
+    #feed-carousel { position: relative; width: 100%; height: 100%; }
+    .feed-slide {
+      position: absolute; inset: 0; opacity: 0;
+      transition: opacity 0.9s ease; pointer-events: none;
+    }
+    .feed-slide.active { opacity: 1; pointer-events: auto; }
+    .feed-slide-bg {
+      position: absolute; inset: 0;
+      background-size: cover; background-position: center;
+      background-repeat: no-repeat; background-color: #111;
+    }
+    .feed-slide-bg::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(to bottom,
+        rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.10) 40%,
+        rgba(0,0,0,0.80) 62%, rgba(0,0,0,0.97) 100%);
+    }
+    .feed-no-image .feed-slide-bg {
+      background: linear-gradient(160deg, #0a2a5e 0%, #041226 100%);
+    }
+    .feed-slide-content {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 2;
+      padding: clamp(14px,4vmin,28px) clamp(12px,3vmin,26px) clamp(36px,6vmin,52px);
+    }
+    .feed-slide-tag {
+      display: inline-block; background: #f5a623; color: #000;
+      font-size: clamp(0.48rem,1.4vmin,0.65rem); font-weight: 800;
+      letter-spacing: 1.5px; text-transform: uppercase;
+      padding: 4px 10px; border-radius: 3px;
+      margin-bottom: clamp(6px,1.8vmin,14px);
+    }
+    .feed-slide-title {
+      font-size: clamp(1rem,3.8vmin,1.85rem); font-weight: 800;
+      color: #fff; line-height: 1.2;
+      margin-bottom: clamp(6px,1.8vmin,14px);
+      text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+    }
+    .feed-slide-desc {
+      font-size: clamp(0.68rem,1.7vmin,0.9rem); color: #ccc; line-height: 1.6;
+      display: -webkit-box; -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .feed-slide-meta {
+      display: flex; align-items: center; gap: 10px;
+      margin-top: clamp(6px,1.8vmin,16px);
+    }
+    .feed-slide-source { font-size: clamp(0.52rem,1.3vmin,0.7rem); font-weight: 700; color: #f5a623; text-transform: uppercase; letter-spacing: 1px; }
+    .feed-slide-date   { font-size: clamp(0.52rem,1.3vmin,0.7rem); color: #666; }
+    #feed-progress {
+      position: fixed; bottom: 0; left: 0; height: 4px;
+      background: #f5a623; width: 0%; z-index: 20; transition: width linear;
+    }
+    #feed-dots {
+      position: fixed; top: 50%; right: 16px;
+      transform: translateY(-50%);
+      display: flex; flex-direction: column; gap: 10px; z-index: 20;
+    }
+    .feed-dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: rgba(255,255,255,0.25);
+      transition: background 0.3s, transform 0.3s;
+    }
+    .feed-dot.active { background: #f5a623; transform: scale(1.6); }
+    #feed-header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+      padding: clamp(10px,2.5vmin,18px) clamp(12px,3vmin,22px);
+      display: flex; align-items: center; justify-content: space-between;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    }
+    #feed-header-title { font-size: clamp(0.52rem,1.4vmin,0.72rem); font-weight: 700; letter-spacing: 2px; color: rgba(255,255,255,0.5); text-transform: uppercase; }
+    #feed-header-clock { font-size: clamp(0.52rem,1.4vmin,0.72rem); color: rgba(255,255,255,0.35); font-variant-numeric: tabular-nums; }
+    #feed-overlay {
+      position: absolute; inset: 0; background: #000; z-index: 99;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    }
+    #feed-overlay-text { color: #555; font-size: clamp(0.7rem,1.9vmin,0.88rem); letter-spacing: 1px; }
+    .feed-spinner {
+      width: 34px; height: 34px;
+      border: 3px solid #1a1a1a; border-top-color: #f5a623;
+      border-radius: 50%; animation: feed-spin 0.8s linear infinite;
+    }
+    @keyframes feed-spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body data-player-mode="login">
@@ -175,13 +264,20 @@
   <video id="videoPlayer" autoplay muted playsinline style="display:none"></video>
   <video id="videoPlayerB" autoplay muted playsinline style="display:none"></video>
   <img id="imgPlayer" style="display:none" />
-  <!-- Feed de informativos: carregado em background, exibido pelo player quando o item é do tipo "feed" -->
-  <iframe
-    id="feedPlayer"
-    src="about:blank"
-    style="display:none; position:fixed; inset:0; width:100%; height:100%; border:0; z-index:5; background:#000;"
-    allow="autoplay"
-  ></iframe>
+  <!-- Feed de informativos (overlay inline, sem iframe) -->
+  <div id="feedPlayer">
+    <div id="feed-overlay">
+      <div class="feed-spinner"></div>
+      <span id="feed-overlay-text">Carregando…</span>
+    </div>
+    <div id="feed-header">
+      <span id="feed-header-title">Informativo</span>
+      <span id="feed-header-clock"></span>
+    </div>
+    <div id="feed-dots"></div>
+    <div id="feed-carousel"></div>
+    <div id="feed-progress"></div>
+  </div>
 
   <!-- Rodapé -->
   <footer id="rodape"><a href="https://www.mrit.com.br" target="_blank" style="color: inherit; text-decoration: none;">© 2026 MRIT</a></footer>

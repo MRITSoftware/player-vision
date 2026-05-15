@@ -64,7 +64,13 @@ let lastFailedRetries = 0;
 let lastShortEndUrl = null;
 let lastShortEndRetries = 0;
 let playbackWatchdogTimer = null;
-let feedTimer = null;
+let feedTimer        = null;
+let feedSlideTimer   = null;
+let feedClockInt     = null;
+let feedItems        = [];
+let feedCurrent      = 0;
+let feedSlidesShown  = 0;
+let feedCurrentQuery = null;
 let isFirstCycle = true; // Rastreia se é o primeiro ciclo da playlist
 let activeMediaItem = null;
 let activeMediaType = null;
@@ -3072,7 +3078,7 @@ async function tocarLoop() {
   }
 
   if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
-  if (feedTimer) { clearTimeout(feedTimer); feedTimer = null; var _ff = document.getElementById('feedPlayer'); if (_ff) _ff.style.display = 'none'; }
+  feedFechar();
   if (!isNativeMediaModeActive()) {
     await stopNativeVideoPlayback();
   }
@@ -4268,8 +4274,7 @@ async function pararTudoMostrarLogin() {
   preloadingBuffer = false;
   stopPlaybackWatchdog();
   pararPollScreenshot();
-  if (feedTimer) { clearTimeout(feedTimer); feedTimer = null; }
-  var _feedEl = document.getElementById('feedPlayer'); if (_feedEl) _feedEl.style.display = 'none';
+  feedFechar();
   isLoadingVideo = false;
   playToken++;
   currentVideoToken++;
@@ -6367,61 +6372,158 @@ async function processarSolicitacaoScreenshot() {
     } catch (_) {}
   }
 }
-// ===== Feed Item (tipo: "feed") =====
-// Exibe o iframe rss-viewer.html com os parâmetros do item da playlist.
-// O iframe fica pré-carregado em background; quando o mesmo feed é exibido novamente
-// apenas envia postMessage 'restart' em vez de recarregar a página.
-async function tocarFeedItem(item, token) {
-  const feedFrame = document.getElementById('feedPlayer');
-  if (!feedFrame) { proximoItem(); return; }
+// ===== Feed Item (tipo: "feed") — overlay inline, sem iframe =====
 
-  const query         = item.feed_query         || 'futebol';
-  const slides        = Math.max(1, parseInt(item.feed_slides)          || 3);
-  const slideDuration = Math.max(3, parseInt(item.feed_slide_duration)  || 7);
-  const totalMs       = slides * slideDuration * 1000;
-  const edgeUrl       = supabaseUrl + '/functions/v1/news-feed';
+function feedFechar() {
+  clearTimeout(feedTimer);    feedTimer    = null;
+  clearTimeout(feedSlideTimer); feedSlideTimer = null;
+  clearInterval(feedClockInt);  feedClockInt   = null;
+  var el = document.getElementById('feedPlayer');
+  if (el) el.style.display = 'none';
+}
 
-  const prevQuery = feedFrame.getAttribute('data-feed-query');
-  const isLoaded  = prevQuery !== null && feedFrame.src && feedFrame.src !== 'about:blank';
+function _feedFormatDate(str) {
+  if (!str) return '';
+  try { return new Date(str).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch(e) { return ''; }
+}
 
-  if (isLoaded && prevQuery === query) {
-    // Mesmo feed já carregado: só reseta o carrossel
-    feedFrame.contentWindow &&
-      feedFrame.contentWindow.postMessage({ action: 'restart', slides, duration: slideDuration * 1000 }, '*');
-  } else {
-    // Feed diferente ou primeira carga
-    const src = 'rss-viewer.html'
-      + '?query='    + encodeURIComponent(query)
-      + '&slides='   + slides
-      + '&duration=' + (slideDuration * 1000)
-      + '&api='      + encodeURIComponent(edgeUrl);
-    feedFrame.src = src;
-    feedFrame.setAttribute('data-feed-query', query);
+function _feedSalvarCache(query, articles) {
+  try { localStorage.setItem('mrit_feed_' + query.replace(/\s+/g,'_'), JSON.stringify({ ts: Date.now(), articles: articles })); } catch(e) {}
+}
+
+function _feedCarregarCache(query) {
+  try {
+    var raw = localStorage.getItem('mrit_feed_' + query.replace(/\s+/g,'_'));
+    if (!raw) return null;
+    var p = JSON.parse(raw);
+    return (Array.isArray(p.articles) && p.articles.length) ? p.articles : null;
+  } catch(e) { return null; }
+}
+
+function _feedConstruirSlides(articles, maxSlides, query) {
+  var carousel = document.getElementById('feed-carousel');
+  var dotsEl   = document.getElementById('feed-dots');
+  if (!carousel || !dotsEl) return;
+  var limited = articles.slice(0, maxSlides);
+  carousel.innerHTML = '';
+  dotsEl.innerHTML   = '';
+  feedCurrent = 0; feedSlidesShown = 0; feedItems = limited;
+  limited.forEach(function(it, i) {
+    var hasImg = !!(it.image_url && it.image_url.startsWith('http'));
+    var slide  = document.createElement('div');
+    slide.className = 'feed-slide' + (hasImg ? '' : ' feed-no-image') + (i === 0 ? ' active' : '');
+    slide.innerHTML =
+      '<div class="feed-slide-bg"' + (hasImg ? ' style="background-image:url(\'' + it.image_url + '\')"' : '') + '></div>' +
+      '<div class="feed-slide-content">' +
+        '<div class="feed-slide-tag">' + (query.charAt(0).toUpperCase() + query.slice(1)) + '</div>' +
+        '<div class="feed-slide-title">' + (it.title || '').replace(/\s*-\s*[^-]+$/, '') + '</div>' +
+        (it.description ? '<div class="feed-slide-desc">' + it.description + '</div>' : '') +
+        '<div class="feed-slide-meta">' +
+          '<span class="feed-slide-source">' + (it.source_name || 'Notícia') + '</span>' +
+          '<span class="feed-slide-date">'   + _feedFormatDate(it.pubDate)   + '</span>' +
+        '</div>' +
+      '</div>';
+    carousel.appendChild(slide);
+    var dot = document.createElement('div');
+    dot.className = 'feed-dot' + (i === 0 ? ' active' : '');
+    dotsEl.appendChild(dot);
+  });
+}
+
+function _feedGoTo(index) {
+  var slides = document.querySelectorAll('.feed-slide');
+  var dots   = document.querySelectorAll('.feed-dot');
+  if (!slides.length) return;
+  slides[feedCurrent].classList.remove('active');
+  if (dots[feedCurrent]) dots[feedCurrent].classList.remove('active');
+  feedCurrent = (index + feedItems.length) % feedItems.length;
+  slides[feedCurrent].classList.add('active');
+  if (dots[feedCurrent]) dots[feedCurrent].classList.add('active');
+}
+
+function _feedStartProgress(slideDuration, maxSlides, token) {
+  var bar = document.getElementById('feed-progress');
+  if (bar) {
+    bar.style.transition = 'none'; bar.style.width = '0%';
+    requestAnimationFrame(function() { requestAnimationFrame(function() {
+      bar.style.transition = 'width ' + (slideDuration * 1000) + 'ms linear';
+      bar.style.width = '100%';
+    }); });
   }
-
-  feedFrame.style.display = 'block';
-  isPlaying = true;
-
-  // Timer de segurança: garante avanço mesmo se o iframe travar
-  feedTimer = setTimeout(function () {
+  clearTimeout(feedSlideTimer);
+  feedSlideTimer = setTimeout(function() {
     if (playToken !== token) return;
-    feedFrame.style.display = 'none';
-    isPlaying = false;
-    feedTimer = null;
-    proximoItem();
-  }, totalMs + 2000); // +2s de folga
-
-  // Escuta sinal "feedDone" do rss-viewer (quando exibiu todos os slides)
-  function onFeedDone(e) {
-    if (e.data && e.data.action === 'feedDone') {
-      window.removeEventListener('message', onFeedDone);
-      if (playToken !== token) return;
-      clearTimeout(feedTimer);
-      feedTimer = null;
-      feedFrame.style.display = 'none';
+    feedSlidesShown++;
+    if (feedSlidesShown >= maxSlides || feedSlidesShown >= feedItems.length) {
+      clearTimeout(feedTimer); feedTimer = null;
+      feedFechar();
       isPlaying = false;
       proximoItem();
+    } else {
+      _feedGoTo(feedCurrent + 1);
+      _feedStartProgress(slideDuration, maxSlides, token);
     }
+  }, slideDuration * 1000);
+}
+
+async function tocarFeedItem(item, token) {
+  var feedEl = document.getElementById('feedPlayer');
+  if (!feedEl) { proximoItem(); return; }
+
+  var query         = item.feed_query         || 'futebol';
+  var slides        = Math.max(1, parseInt(item.feed_slides)         || 3);
+  var slideDuration = Math.max(3, parseInt(item.feed_slide_duration) || 7);
+  var edgeUrl       = supabaseUrl + '/functions/v1/news-feed';
+
+  feedEl.style.display = 'block';
+  isPlaying = true;
+
+  // Relógio no header
+  clearInterval(feedClockInt);
+  function _feedTick() { var c = document.getElementById('feed-header-clock'); if (c) c.textContent = new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }); }
+  _feedTick(); feedClockInt = setInterval(_feedTick, 1000);
+  var ht = document.getElementById('feed-header-title');
+  if (ht) ht.textContent = query.charAt(0).toUpperCase() + query.slice(1);
+
+  // Timer de segurança
+  clearTimeout(feedTimer);
+  feedTimer = setTimeout(function() {
+    if (playToken !== token) return;
+    feedFechar(); isPlaying = false; proximoItem();
+  }, slides * slideDuration * 1000 + 3000);
+
+  // Reusar cache do mesmo query
+  if (feedCurrentQuery === query && feedItems.length > 0) {
+    var ov0 = document.getElementById('feed-overlay');
+    if (ov0) ov0.style.display = 'none';
+    _feedConstruirSlides(feedItems, slides, query);
+    _feedStartProgress(slideDuration, slides, token);
+    return;
   }
-  window.addEventListener('message', onFeedDone);
+
+  feedCurrentQuery = query; feedItems = [];
+  var ov = document.getElementById('feed-overlay');
+  if (ov) ov.innerHTML = '<div class="feed-spinner"></div><span id="feed-overlay-text">Carregando…</span>';
+  if (ov) ov.style.display = 'flex';
+
+  var articles = null;
+  try {
+    var res  = await fetch(edgeUrl + '?query=' + encodeURIComponent(query) + '&language=pt&category=sports');
+    var data = await res.json();
+    if (data.status === 'success' && data.results && data.results.length) {
+      articles = data.results.filter(function(a) { return a.title; });
+      _feedSalvarCache(query, articles);
+    }
+  } catch(e) {}
+
+  if (!articles || !articles.length) articles = _feedCarregarCache(query);
+  if (playToken !== token) return;
+
+  if (articles && articles.length) {
+    _feedConstruirSlides(articles, slides, query);
+    if (ov) ov.style.display = 'none';
+    _feedStartProgress(slideDuration, slides, token);
+  } else {
+    if (ov) ov.innerHTML = '<span style="color:#e55;font-size:clamp(0.8rem,2vmin,1rem)">Sem notícias disponíveis</span>';
+  }
 }
