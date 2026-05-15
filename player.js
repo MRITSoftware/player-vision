@@ -69,6 +69,7 @@ let feedSlideTimer   = null;
 let feedClockInt     = null;
 let feedItems        = [];
 let feedArticlesFull = [];
+let feedOffsets      = {}; // { query: nextStartIndex }
 let feedCurrent      = 0;
 let feedSlidesShown  = 0;
 let feedCurrentQuery = null;
@@ -6388,6 +6389,19 @@ function _feedFormatDate(str) {
   try { return new Date(str).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); } catch(e) { return ''; }
 }
 
+function _feedFatiarComOffset(articles, maxSlides, query) {
+  if (!articles.length) return [];
+  var offset  = feedOffsets[query] || 0;
+  var total   = articles.length;
+  offset      = offset % total;
+  var slice   = articles.slice(offset, offset + maxSlides);
+  if (slice.length < maxSlides) {
+    slice = slice.concat(articles.slice(0, maxSlides - slice.length));
+  }
+  feedOffsets[query] = (offset + maxSlides) % total;
+  return slice;
+}
+
 function _feedSalvarCache(query, articles) {
   try { localStorage.setItem('mrit_feed_' + query.replace(/\s+/g,'_'), JSON.stringify({ ts: Date.now(), articles: articles })); } catch(e) {}
 }
@@ -6493,11 +6507,11 @@ async function tocarFeedItem(item, token) {
     feedFechar(); isPlaying = false; proximoItem();
   }, slides * slideDuration * 1000 + 3000);
 
-  // Reusar artigos em memória do mesmo query (usa lista completa para respeitar novo slides)
+  // Reusar artigos em memória do mesmo query
   if (feedCurrentQuery === query && feedArticlesFull.length > 0) {
     var ov0 = document.getElementById('feed-overlay');
     if (ov0) ov0.style.display = 'none';
-    _feedConstruirSlides(feedArticlesFull, slides, query);
+    _feedConstruirSlides(_feedFatiarComOffset(feedArticlesFull, slides, query), slides, query);
     _feedStartProgress(slideDuration, slides, token);
     return;
   }
@@ -6522,7 +6536,8 @@ async function tocarFeedItem(item, token) {
 
   if (articles && articles.length) {
     feedArticlesFull = articles;
-    _feedConstruirSlides(articles, slides, query);
+    feedOffsets[query] = 0; // reset ao buscar artigos novos
+    _feedConstruirSlides(_feedFatiarComOffset(articles, slides, query), slides, query);
     if (ov) ov.style.display = 'none';
     _feedStartProgress(slideDuration, slides, token);
   } else {
