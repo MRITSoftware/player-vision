@@ -6264,77 +6264,107 @@ async function verificarScreenshotPendente() {
 async function capturarScreenshot() {
   const width = window.innerWidth || 1920;
   const height = window.innerHeight || 1080;
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
 
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, width, height);
+  function blobFromCanvas(cnv) {
+    return new Promise(function(res, rej) {
+      cnv.toBlob(function(b) { b ? res(b) : rej(new Error('toBlob retornou null')); }, 'image/jpeg', 0.75);
+    });
+  }
 
-  let captured = false;
+  function canvasFallback() {
+    var fb = document.createElement('canvas');
+    fb.width = width; fb.height = height;
+    var c2 = fb.getContext('2d');
+    c2.fillStyle = '#0d1117'; c2.fillRect(0, 0, width, height);
+    c2.fillStyle = '#58a6ff'; c2.font = 'bold 52px sans-serif';
+    c2.textAlign = 'center'; c2.textBaseline = 'middle';
+    c2.fillText(codigoAtual || 'MRIT Vision', width / 2, height / 2 - 28);
+    c2.fillStyle = '#8b949e'; c2.font = '26px sans-serif';
+    c2.fillText(new Date().toLocaleString('pt-BR'), width / 2, height / 2 + 36);
+    return fb;
+  }
+
+  // Tenta capturar a mídia ativa num canvas separado
   try {
+    var canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, width, height);
+
     if (activeMediaType === 'video') {
-      const activeVid = getUniqueVideoEls().find(v => v.style.display !== 'none' && v.readyState >= 2);
-      if (activeVid) { ctx.drawImage(activeVid, 0, 0, width, height); captured = true; }
-    } else if (activeMediaType === 'image' && img?.complete && img.naturalWidth > 0) {
+      var activeVid = getUniqueVideoEls().find(function(v) { return v.style.display !== 'none' && v.readyState >= 2; });
+      if (activeVid) ctx.drawImage(activeVid, 0, 0, width, height);
+    } else if (activeMediaType === 'image' && img && img.complete && img.naturalWidth > 0) {
       ctx.drawImage(img, 0, 0, width, height);
-      captured = true;
     }
+
+    // toBlob pode lançar SecurityError se o canvas foi contaminado por CORS
+    return await blobFromCanvas(canvas);
   } catch (e) {
-    console.warn('[screenshot] Não foi possível capturar mídia ativa:', e.message);
+    console.warn('[screenshot] Canvas contaminado ou erro na captura, usando fallback:', e.message);
   }
 
-  if (!captured) {
-    // Fallback: tela escura com código e timestamp (ex: player nativo ExoPlayer)
-    ctx.fillStyle = '#0d1117';
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#58a6ff';
-    ctx.font = 'bold 52px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(codigoAtual || 'MRIT Vision', width / 2, height / 2 - 28);
-    ctx.fillStyle = '#8b949e';
-    ctx.font = '26px sans-serif';
-    ctx.fillText(new Date().toLocaleString('pt-BR'), width / 2, height / 2 + 36);
+  // Fallback garantido: canvas limpo com código e horário
+  try {
+    return await blobFromCanvas(canvasFallback());
+  } catch (e) {
+    console.error('[screenshot] Fallback também falhou:', e.message);
+    return null;
   }
-
-  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.75));
 }
 
 async function processarSolicitacaoScreenshot() {
+  var etapa = 'reset';
   try {
-    // Reset imediato da flag para evitar duplo processamento
     await client.from('displays')
       .update({ screenshot_pending: false })
       .eq('codigo_unico', codigoAtual);
 
-    const blob = await capturarScreenshot();
-    if (!blob) return;
-
-    // Sobrescreve sempre o mesmo arquivo por tela (latest.jpg) para economizar storage
-    const filename = `${codigoAtual}/latest.jpg`;
-    const { error: uploadError } = await client.storage
-      .from('screenshots')
-      .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
-
-    if (uploadError) {
-      console.warn('[screenshot] Erro ao enviar para storage:', uploadError.message);
+    etapa = 'captura';
+    var blob = await capturarScreenshot();
+    if (!blob) {
+      await client.from('displays').update({
+        screenshot_url: 'ERRO: blob nulo (canvas falhou)',
+        screenshot_at: new Date().toISOString()
+      }).eq('codigo_unico', codigoAtual);
       return;
     }
 
-    const { data: urlData } = client.storage.from('screenshots').getPublicUrl(filename);
-    // Timestamp na URL para forçar reload no painel (evita cache do browser)
-    const publicUrl = urlData?.publicUrl ? `${urlData.publicUrl}?t=${Date.now()}` : null;
+    etapa = 'upload';
+    var filename = codigoAtual + '/latest.jpg';
+    var uploadResult = await client.storage
+      .from('screenshots')
+      .upload(filename, blob, { contentType: 'image/jpeg', upsert: true });
+
+    if (uploadResult.error) {
+      await client.from('displays').update({
+        screenshot_url: 'ERRO upload: ' + uploadResult.error.message,
+        screenshot_at: new Date().toISOString()
+      }).eq('codigo_unico', codigoAtual);
+      console.warn('[screenshot] Erro upload:', uploadResult.error.message);
+      return;
+    }
+
+    etapa = 'url';
+    var urlResult = client.storage.from('screenshots').getPublicUrl(filename);
+    var publicUrl = urlResult.data && urlResult.data.publicUrl
+      ? urlResult.data.publicUrl + '?t=' + Date.now()
+      : null;
 
     await client.from('displays').update({
       screenshot_url: publicUrl,
       screenshot_at: new Date().toISOString()
     }).eq('codigo_unico', codigoAtual);
 
-    console.log('[screenshot] Capturado e enviado:', publicUrl);
+    console.log('[screenshot] OK:', publicUrl);
   } catch (err) {
-    console.error('[screenshot] Erro ao processar screenshot:', err?.message);
+    console.error('[screenshot] Erro em etapa', etapa, ':', err && err.message);
+    try {
+      await client.from('displays').update({
+        screenshot_url: 'ERRO ' + etapa + ': ' + (err && err.message ? err.message : String(err)),
+        screenshot_at: new Date().toISOString()
+      }).eq('codigo_unico', codigoAtual);
+    } catch (_) {}
   }
 }
 // ===== Feed Item (tipo: "feed") =====
