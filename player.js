@@ -803,6 +803,14 @@ async function obterCodigoEmUsoPorOutroDispositivo(codigo, deviceIdAtual) {
 }
 
 // Garantir que elementos estejam visÃ­veis quando a pÃ¡gina carregar
+// Reconecta canais realtime quando app volta do background (critico no Android)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && codigoAtual && realtimeReady) {
+    console.log('[realtime] app voltou ao foreground, reconectando canais...');
+    iniciarRealtime();
+  }
+});
+
 document.addEventListener('DOMContentLoaded', function() {
   ensureElementsVisible();
   
@@ -3968,7 +3976,14 @@ function subscribePlaylistChannel(playlistId) {
         await carregarConteudo(currentPlaylistId);
       }
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[realtime] playlist_itens conectado');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[realtime] playlist_itens falhou (' + status + '):', err?.message || err);
+        setTimeout(() => { if (codigoAtual) subscribePlaylistChannel(currentPlaylistId); }, 5000);
+      }
+    });
 }
 
 function iniciarRealtime() {
@@ -4028,7 +4043,14 @@ function iniciarRealtime() {
         await verificarPromocaoContinuamente();
       }
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[realtime] displays conectado');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[realtime] displays falhou (' + status + '):', err?.message || err);
+        setTimeout(() => { if (codigoAtual) iniciarRealtime(); }, 5000);
+      }
+    });
 
   subscribePlaylistChannel(currentPlaylistId);
   subscribeDispositivosChannel();
@@ -4178,7 +4200,14 @@ function subscribeDeviceCommandsChannel() {
           await verificarComandosDispositivo();
         }
       })
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[realtime] device_commands conectado');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime] device_commands falhou (' + status + '):', err?.message || err);
+          setTimeout(() => { if (codigoAtual) subscribeDeviceCommandsChannel(); }, 5000);
+        }
+      });
   } catch (err) {
     if (!isMissingRelationError(err)) {
       console.warn('[realtime] device_commands channel error:', err);
@@ -4201,7 +4230,14 @@ function subscribePromoChannel() {
       }, async () => {
         await verificarPromocaoContinuamente();
       })
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[realtime] promo conectado');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[realtime] promo falhou (' + status + '):', err?.message || err);
+          setTimeout(() => { if (codigoAtual) subscribePromoChannel(); }, 5000);
+        }
+      });
   } catch (err) {
     if (!isMissingRelationError(err)) {
       console.warn('[realtime] promo channel error:', err);
