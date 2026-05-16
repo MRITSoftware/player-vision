@@ -44,6 +44,7 @@ let dispositivosCheckTimer = null;
 let deviceCommandsChannel = null;
 let promoChannel = null;
 let cacheCheckTimer = null;
+let displayFallbackTimer = null;
 let playToken = 0;
 let currentItemUrl = null;
 let isPlaying = false;
@@ -3975,86 +3976,53 @@ function iniciarRealtime() {
   if (displaysChannel) client.removeChannel(displaysChannel);
 
   displaysChannel = client
-    .channel("realtime:displays")
+    .channel(`realtime:displays:${codigoAtual}`)
     .on(
       "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "displays" },
+      { event: "UPDATE", schema: "public", table: "displays", filter: `codigo_unico=eq.${codigoAtual}` },
       async (payload) => {
-        // Verificar mudanÃ§as de device_id (opcional - nÃ£o quebra se campo nÃ£o existir)
+        // Verificar mudanca de device_id (atribuicao remota de novo codigo)
         try {
           const deviceId = gerarDeviceId();
-          
-          // Verificar se a mudanÃ§a Ã© para este dispositivo (via device_id)
           if (payload.new.device_id && payload.new.device_id === deviceId && payload.new.device_id !== payload.old?.device_id) {
-            // Dispositivo foi atribuÃ­do a um novo cÃ³digo remotamente
-            const novoCodigo = payload.new.codigo_unico;
-            console.log("ðŸ”„ CÃ³digo alterado remotamente para este dispositivo:", novoCodigo);
-            
-            // Atualizar cÃ³digo salvo
+            const novoCodigo = payload.new.codigo_unico || codigoAtual;
             localStorage.setItem(CODIGO_DISPLAY_KEY, novoCodigo);
-            
-            // Recarregar pÃ¡gina para aplicar novo cÃ³digo
             location.reload();
             return;
           }
-        } catch (err) {
-          // Ignorar erros relacionados a device_id (campo pode nÃ£o existir)
-        }
-        
-        // Verificar mudanÃ§as no display atual
-        if (payload.new.codigo_unico !== codigoAtual) return;
+        } catch (err) {}
 
-        // Verificar se Ã© o mesmo dispositivo antes de recarregar
-        try {
-          const deviceId = gerarDeviceId();
-          const mesmoDispositivo = payload.new.device_id && payload.new.device_id === deviceId;
-          
-          // Se is_locked = false, significa que exibiÃ§Ã£o foi parada
-          // Limpar tudo e nÃ£o continuar
-          if (payload.new.is_locked === false) {
-            console.log("â¸ï¸ Display desbloqueado via realtime (is_locked = false), parando exibiÃ§Ã£o...");
-            
-            // Desativar dispositivo
-            await client
-              .from("dispositivos")
-              .update({ is_ativo: false })
-              .eq("device_id", deviceId);
-            
-            // Limpar localStorage
-            localStorage.removeItem(CODIGO_DISPLAY_KEY);
-            localStorage.removeItem(LOCAL_TELA_KEY);
-            
-            // Limpar cache do namespace antes de sair
-            navigator.serviceWorker.controller?.postMessage({ action: "clearNamespace" });
-            
-            // Parar tudo e mostrar tela de login
-            await pararTudoMostrarLogin();
-            return;
-          }
-        } catch (err) {
-          // Se nÃ£o conseguir verificar device_id, usar comportamento antigo
-          if (payload.new.is_locked === false) {
-            console.log("â¸ï¸ Display desbloqueado (is_locked = false), parando exibiÃ§Ã£o...");
-            
-            // Limpar localStorage
-            localStorage.removeItem(CODIGO_DISPLAY_KEY);
-            localStorage.removeItem(LOCAL_TELA_KEY);
-            
-            navigator.serviceWorker.controller?.postMessage({ action: "clearNamespace" });
-            await pararTudoMostrarLogin();
-            return;
-          }
+        // Filtro ja garante que e este display — nao precisa checar codigo_unico no payload
+
+        // is_locked = false => exibicao parada
+        const isLocked = payload.new.is_locked;
+        if (isLocked === false) {
+          console.log("[realtime] display desbloqueado, parando exibicao...");
+          try {
+            const deviceId = gerarDeviceId();
+            await client.from("dispositivos").update({ is_ativo: false }).eq("device_id", deviceId);
+          } catch {}
+          await pararTudoMostrarLogin();
+          return;
         }
 
         const orientationChanged = applyDisplayOrientationSetting(payload.new.orientacao);
         const novoCodigo = payload.new.codigo_conteudoAtual;
-        if (novoCodigo && novoCodigo !== currentContentCode) {
-          console.log("ðŸ”„ ConteÃºdo alterado remotamente:", novoCodigo);
-          carregarConteudo(novoCodigo);
-        } else if (!novoCodigo && currentContentCode) {
-          await pararTudoMostrarLogin();
+
+        if (novoCodigo !== undefined) {
+          if (novoCodigo && novoCodigo !== currentContentCode) {
+            console.log("[realtime] conteudo alterado remotamente:", novoCodigo);
+            // Invalida cache para forcar reload do banco
+            localStorage.removeItem(cacheKeyFor(novoCodigo));
+            localStorage.removeItem(cacheKeyFor(codigoAtual));
+            if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
+            carregarConteudo(novoCodigo);
+          } else if (!novoCodigo && currentContentCode) {
+            await pararTudoMostrarLogin();
+          } else if (orientationChanged && currentContentCode) {
+            carregarConteudo(currentContentCode);
+          }
         } else if (orientationChanged && currentContentCode) {
-          console.log("Orientacao alterada remotamente, recarregando conteudo atual");
           carregarConteudo(currentContentCode);
         }
 
@@ -4067,6 +4035,10 @@ function iniciarRealtime() {
   subscribeDispositivosChannel();
   subscribeDeviceCommandsChannel();
   subscribePromoChannel();
+
+  // Fallback poll a cada 30s — garante deteccao mesmo se realtime falhar
+  if (displayFallbackTimer) clearInterval(displayFallbackTimer);
+  displayFallbackTimer = setInterval(checarLockEConteudo, 30000);
 }
 
 // ===== Realtime para dispositivos =====
@@ -4348,6 +4320,8 @@ async function pararTudoMostrarLogin() {
   stopPlaybackWatchdog();
   pararPollScreenshot();
   feedFechar();
+  if (displayFallbackTimer) { clearInterval(displayFallbackTimer); displayFallbackTimer = null; }
+  if (cacheCheckTimer) { clearInterval(cacheCheckTimer); cacheCheckTimer = null; }
   isLoadingVideo = false;
   playToken++;
   currentVideoToken++;
@@ -4711,6 +4685,10 @@ async function checarLockEConteudo() {
     const orientationChanged = applyDisplayOrientationSetting(data.orientacao);
 
     if (data.codigo_conteudoAtual && data.codigo_conteudoAtual !== currentContentCode) {
+      // Invalida cache para forcar reload do banco
+      localStorage.removeItem(cacheKeyFor(data.codigo_conteudoAtual));
+      localStorage.removeItem(cacheKeyFor(codigoAtual));
+      if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
       await carregarConteudo(data.codigo_conteudoAtual);
     } else if (!data.codigo_conteudoAtual && currentContentCode) {
       await pararTudoMostrarLogin();
