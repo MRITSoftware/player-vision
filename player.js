@@ -4017,7 +4017,7 @@ function iniciarRealtime() {
             if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
             carregarConteudo(novoCodigo);
           } else if (!novoCodigo && currentContentCode) {
-            await pararTudoMostrarLogin();
+            await pararExibicaoIdle();
           } else if (orientationChanged && currentContentCode) {
             carregarConteudo(currentContentCode);
           }
@@ -4295,6 +4295,47 @@ async function verificarMudancaDispositivo() {
   } catch (err) {
     console.warn("âš ï¸ Erro na verificaÃ§Ã£o periÃ³dica de dispositivo:", err);
   }
+}
+
+// Para exibicao mas mantem o display ativo (sem voltar pra tela de login)
+// Usado quando o conteudo e removido/desatribuido — display continua de pe
+async function pararExibicaoIdle() {
+  await stopNativeVideoPlayback();
+  for (const v of getUniqueVideoEls()) {
+    try { v.pause(); v.currentTime = 0; v.removeAttribute("src"); v.load(); } catch {}
+    v.style.display = "none";
+  }
+  if (img) {
+    img.src = "";
+    img.style.display = "none";
+    if (img.timeoutId) { clearTimeout(img.timeoutId); delete img.timeoutId; }
+  }
+  destroyHls();
+  stopPlaybackWatchdog();
+  feedFechar();
+  preloadedBufferUrl = null;
+  preloadingBuffer = false;
+  isLoadingVideo = false;
+  isPlaying = false;
+  playToken++;
+  currentVideoToken++;
+  currentItemUrl = null;
+  activeMediaItem = null;
+  activeMediaType = null;
+  currentContentCode = null;
+  currentPlaylistId = null;
+  playlist = [];
+  currentIndex = 0;
+  // Limpa cache do conteudo que estava sendo exibido
+  navigator.serviceWorker?.controller?.postMessage({ action: "clearNamespace" });
+  try {
+    if (codigoAtual) localStorage.removeItem(cacheKeyFor(codigoAtual));
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith("playlist_cache_")) localStorage.removeItem(k);
+    });
+  } catch {}
+  if (codigoAtual) await atualizarStatusCache(codigoAtual, false);
+  // Tela preta — display continua com o codigo ativo, so sem conteudo
 }
 
 // ===== Cleanup/lock =====
@@ -4685,7 +4726,7 @@ async function checarLockEConteudo() {
       if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
       await carregarConteudo(data.codigo_conteudoAtual);
     } else if (!data.codigo_conteudoAtual && currentContentCode) {
-      await pararTudoMostrarLogin();
+      await pararExibicaoIdle();
       return;
     } else if (orientationChanged && currentContentCode) {
       await carregarConteudo(currentContentCode);
