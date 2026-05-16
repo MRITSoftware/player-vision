@@ -13,7 +13,6 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsIm
 const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
-const POLLING_MS = 1000; // 1 segundo para resposta instantÃ¢nea
 
 // ===== ConfiguraÃ§Ãµes de Buffering =====
 // Modos disponÃ­veis:
@@ -42,7 +41,8 @@ let displaysChannel = null;
 let playlistChannel = null;
 let dispositivosChannel = null;
 let dispositivosCheckTimer = null;
-let pollTimer = null;
+let deviceCommandsChannel = null;
+let promoChannel = null;
 let cacheCheckTimer = null;
 let playToken = 0;
 let currentItemUrl = null;
@@ -2538,9 +2538,6 @@ async function iniciar() {
       realtimeReady = true;
     }
 
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(checarLockEConteudo, POLLING_MS);
-    
   // VerificaÃ§Ã£o periÃ³dica do cache (a cada 60 segundos)
   if (cacheCheckTimer) clearInterval(cacheCheckTimer);
   cacheCheckTimer = setInterval(async () => {
@@ -4040,20 +4037,24 @@ function iniciarRealtime() {
         const orientationChanged = applyDisplayOrientationSetting(payload.new.orientacao);
         const novoCodigo = payload.new.codigo_conteudoAtual;
         if (novoCodigo && novoCodigo !== currentContentCode) {
-          console.log("ðŸ”„ ConteÃºdo alterado remotamente:", novoCodigo);
+          console.log(“ðŸ”„ ConteÃºdo alterado remotamente:”, novoCodigo);
           carregarConteudo(novoCodigo);
+        } else if (!novoCodigo && currentContentCode) {
+          await pararTudoMostrarLogin();
         } else if (orientationChanged && currentContentCode) {
-          console.log("Orientacao alterada remotamente, recarregando conteudo atual");
+          console.log(“Orientacao alterada remotamente, recarregando conteudo atual”);
           carregarConteudo(currentContentCode);
         }
+
+        await verificarPromocaoContinuamente();
       }
     )
     .subscribe();
 
   subscribePlaylistChannel(currentPlaylistId);
-  
-  // Realtime para tabela dispositivos (nova tabela)
   subscribeDispositivosChannel();
+  subscribeDeviceCommandsChannel();
+  subscribePromoChannel();
 }
 
 // ===== Realtime para dispositivos =====
@@ -4174,11 +4175,66 @@ function subscribeDispositivosChannel() {
     }
   }
   
-  // FALLBACK: VerificaÃ§Ã£o periÃ³dica caso realtime nÃ£o funcione
-  if (dispositivosCheckTimer) clearInterval(dispositivosCheckTimer);
-  dispositivosCheckTimer = setInterval(async () => {
-    await verificarMudancaDispositivo();
-  }, 5000); // Verificar a cada 5 segundos
+}
+
+// ===== Realtime para device_commands =====
+function subscribeDeviceCommandsChannel() {
+  if (deviceCommandsChannel) {
+    client.removeChannel(deviceCommandsChannel);
+    deviceCommandsChannel = null;
+  }
+
+  const deviceId = gerarDeviceId();
+  if (!deviceId) return;
+
+  try {
+    deviceCommandsChannel = client
+      .channel('realtime:device_commands')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'device_commands',
+          filter: `device_id=eq.${deviceId}`,
+        },
+        async (payload) => {
+          if (!payload.new.executed) {
+            await verificarComandosDispositivo();
+          }
+        }
+      )
+      .subscribe();
+  } catch (err) {
+    if (!isMissingRelationError(err)) {
+      console.warn('[realtime] Erro ao criar channel device_commands:', err);
+    }
+  }
+}
+
+// ===== Realtime para promo (contador) =====
+function subscribePromoChannel() {
+  if (promoChannel) {
+    client.removeChannel(promoChannel);
+    promoChannel = null;
+  }
+
+  try {
+    promoChannel = client
+      .channel('realtime:promo')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'promo' },
+        async () => {
+          await verificarPromocaoContinuamente();
+        }
+      )
+      .subscribe();
+  } catch (err) {
+    if (!isMissingRelationError(err)) {
+      console.warn('[realtime] Erro ao criar channel promo:', err);
+    }
+  }
 }
 
 // ===== VerificaÃ§Ã£o periÃ³dica de mudanÃ§as (fallback) =====
@@ -4642,6 +4698,9 @@ async function checarLockEConteudo() {
 
     if (data.codigo_conteudoAtual && data.codigo_conteudoAtual !== currentContentCode) {
       await carregarConteudo(data.codigo_conteudoAtual);
+    } else if (!data.codigo_conteudoAtual && currentContentCode) {
+      await pararTudoMostrarLogin();
+      return;
     } else if (orientationChanged && currentContentCode) {
       await carregarConteudo(currentContentCode);
     }
