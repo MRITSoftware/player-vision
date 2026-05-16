@@ -4013,8 +4013,10 @@ function iniciarRealtime() {
           const deviceId = gerarDeviceId();
           if (payload.new.device_id && payload.new.device_id === deviceId && payload.new.device_id !== payload.old?.device_id) {
             const novoCodigo = payload.new.codigo_unico || codigoAtual;
-            localStorage.setItem(CODIGO_DISPLAY_KEY, novoCodigo);
-            location.reload();
+            if (novoCodigo && novoCodigo !== codigoAtual) {
+              localStorage.setItem(CODIGO_DISPLAY_KEY, novoCodigo);
+              location.reload();
+            }
             return;
           }
         } catch (err) {}
@@ -4030,6 +4032,16 @@ function iniciarRealtime() {
             await client.from("dispositivos").update({ is_ativo: false }).eq("device_id", deviceId);
           } catch {}
           await pararTudoMostrarLogin();
+          return;
+        }
+
+        // limpar_cache = true => painel solicitou limpeza de cache
+        if (payload.new.limpar_cache === true) {
+          console.log("[realtime] limpeza de cache solicitada pelo painel");
+          try {
+            await client.from("displays").update({ limpar_cache: false }).eq("codigo_unico", codigoAtual);
+          } catch {}
+          await limparCacheAtualEReload();
           return;
         }
 
@@ -5074,22 +5086,21 @@ window.addEventListener("online", () => {
             return;
           }
           
-          // Se estÃ¡ locked e Ã© o mesmo dispositivo, garantir lock
+          // Se estÃ¡ locked e Ã© o mesmo dispositivo, garantir lock no banco
           if (mesmoDispositivo) {
-            const updateData = { 
-              is_locked: true, 
+            const updateData = {
+              is_locked: true,
               status: "Em uso",
               device_id: deviceId,
               device_last_seen: new Date().toISOString()
             };
-            
+
             try {
               await client
                 .from("displays")
                 .update(updateData)
                 .eq("codigo_unico", codigoAtual);
             } catch (updateErr) {
-              // Se campos nÃ£o existirem, fazer update sem eles
               if (updateErr.message && updateErr.message.includes('column') && updateErr.message.includes('does not exist')) {
                 await client
                   .from("displays")
@@ -5097,11 +5108,17 @@ window.addEventListener("online", () => {
                   .eq("codigo_unico", codigoAtual);
               }
             }
-
-            await enviarHeartbeatOnline();
           }
+
+          // Sempre envia heartbeat ao voltar online (independente de mesmoDispositivo)
+          await enviarHeartbeatOnline();
+        } else {
+          // Sem dado do display, envia heartbeat mesmo assim
+          await enviarHeartbeatOnline();
         }
-      } catch {}
+      } catch {
+        try { await enviarHeartbeatOnline(); } catch {}
+      }
     }
 
     if (!realtimeReady) {
@@ -5122,7 +5139,18 @@ window.addEventListener("online", () => {
         pendingResync = true;
       }
     }
-  }, 1200);
+  }, 500);
+});
+
+// Marca offline imediatamente ao perder conexÃ£o
+window.addEventListener("offline", () => {
+  if (!codigoAtual) return;
+  const nowIso = new Date().toISOString();
+  try {
+    client.from("displays").update({ status_tela: "Offline", last_ping: nowIso })
+      .eq("codigo_unico", codigoAtual).then(() => {}).catch(() => {});
+  } catch {}
+  console.log("[connectivity] dispositivo ficou offline");
 });
 
 setInterval(async () => {
