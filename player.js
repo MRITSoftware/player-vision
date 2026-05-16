@@ -4037,12 +4037,12 @@ function iniciarRealtime() {
         const orientationChanged = applyDisplayOrientationSetting(payload.new.orientacao);
         const novoCodigo = payload.new.codigo_conteudoAtual;
         if (novoCodigo && novoCodigo !== currentContentCode) {
-          console.log(“ðŸ”„ ConteÃºdo alterado remotamente:”, novoCodigo);
+          console.log("ðŸ”„ ConteÃºdo alterado remotamente:", novoCodigo);
           carregarConteudo(novoCodigo);
         } else if (!novoCodigo && currentContentCode) {
           await pararTudoMostrarLogin();
         } else if (orientationChanged && currentContentCode) {
-          console.log(“Orientacao alterada remotamente, recarregando conteudo atual”);
+          console.log("Orientacao alterada remotamente, recarregando conteudo atual");
           carregarConteudo(currentContentCode);
         }
 
@@ -4175,69 +4175,61 @@ function subscribeDispositivosChannel() {
     }
   }
   
+  // FALLBACK: VerificaÃ§Ã£o periÃ³dica caso realtime nÃ£o funcione
 }
 
-// ===== Realtime para device_commands =====
+// ===== VerificaÃ§Ã£o periÃ³dica de mudanÃ§as (fallback) =====
 function subscribeDeviceCommandsChannel() {
   if (deviceCommandsChannel) {
     client.removeChannel(deviceCommandsChannel);
     deviceCommandsChannel = null;
   }
-
   const deviceId = gerarDeviceId();
   if (!deviceId) return;
-
   try {
     deviceCommandsChannel = client
       .channel('realtime:device_commands')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'device_commands',
-          filter: `device_id=eq.${deviceId}`,
-        },
-        async (payload) => {
-          if (!payload.new.executed) {
-            await verificarComandosDispositivo();
-          }
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'device_commands',
+        filter: `device_id=eq.${deviceId}`,
+      }, async (payload) => {
+        if (!payload.new.executed) {
+          await verificarComandosDispositivo();
         }
-      )
+      })
       .subscribe();
   } catch (err) {
     if (!isMissingRelationError(err)) {
-      console.warn('[realtime] Erro ao criar channel device_commands:', err);
+      console.warn('[realtime] device_commands channel error:', err);
     }
   }
 }
 
-// ===== Realtime para promo (contador) =====
 function subscribePromoChannel() {
   if (promoChannel) {
     client.removeChannel(promoChannel);
     promoChannel = null;
   }
-
   try {
     promoChannel = client
       .channel('realtime:promo')
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'promo' },
-        async () => {
-          await verificarPromocaoContinuamente();
-        }
-      )
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'promo',
+      }, async () => {
+        await verificarPromocaoContinuamente();
+      })
       .subscribe();
   } catch (err) {
     if (!isMissingRelationError(err)) {
-      console.warn('[realtime] Erro ao criar channel promo:', err);
+      console.warn('[realtime] promo channel error:', err);
     }
   }
 }
 
-// ===== VerificaÃ§Ã£o periÃ³dica de mudanÃ§as (fallback) =====
 async function verificarMudancaDispositivo() {
   if (!codigoAtual || !navigator.onLine) return;
   
