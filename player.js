@@ -1198,7 +1198,10 @@ function buildPlaylistSignature(items) {
     const duration = item?.duration ?? "";
     const fit = item?.fit ?? "";
     const focus = item?.focus ?? "";
-    return `${index}::${url}::${urlPortrait}::${urlLandscape}::${urlLow}::${urlPortraitLow}::${urlLandscapeLow}::${tipo}::${duration}::${fit}::${focus}`;
+    const feedQuery    = (item?.feed_query           ?? "").toString().trim();
+    const feedSlides   = (item?.feed_slides          ?? "").toString().trim();
+    const feedDuration = (item?.feed_slide_duration  ?? "").toString().trim();
+    return `${index}::${url}::${urlPortrait}::${urlLandscape}::${urlLow}::${urlPortraitLow}::${urlLandscapeLow}::${tipo}::${duration}::${fit}::${focus}::${feedQuery}::${feedSlides}::${feedDuration}`;
   }).join("||");
 }
 
@@ -6212,6 +6215,9 @@ async function processarForceRecache(itens) {
   const toRecache = (itens || []).filter(i => i.force_recache);
   if (!toRecache.length) return;
 
+  // Avisa o painel que o cache está sendo refeito
+  await atualizarStatusCache(codigoAtual, false, false);
+
   for (const item of toRecache) {
     const urls = [item.url, item.urlPortrait, item.urlLandscape].filter(Boolean);
     for (const url of urls) {
@@ -6233,6 +6239,9 @@ async function processarForceRecache(itens) {
     const ids = toRecache.map(i => i.id).filter(Boolean);
     if (ids.length) await client.from('playlist_itens').update({ force_recache: false }).in('id', ids);
   } catch {}
+
+  // Agenda verificação para atualizar cache_ready quando re-download concluir
+  agendarVerificacaoIntegridade();
 }
 
 let cacheIntegrityTimer = null;
