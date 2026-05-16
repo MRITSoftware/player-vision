@@ -586,6 +586,17 @@ self.addEventListener("message", async (event) => {
 // Atualiza cache para o namespace atual (imagens → Cache API; vídeos → IDB)
 async function updateCacheForNamespace(namespace, playlist) {
   if (!playlist?.length) {
+    // Limpa arquivos do namespace mesmo com playlist vazia (conteudo removido)
+    const keys = await idbAllKeys();
+    const prefix = `${namespace}::`;
+    await Promise.all(keys.map(k => String(k).startsWith(prefix) ? idbDel(k) : null));
+    const cache = await caches.open(CACHE_NAME);
+    const cacheKeys = await cache.keys();
+    await Promise.all(cacheKeys.map(req => {
+      const u = new URL(req.url);
+      if (isSupabaseStorageURL(u)) return cache.delete(req);
+      return null;
+    }));
     return { totalTargets: 0, readyCount: 0, failedCount: 0, complete: true };
   }
 

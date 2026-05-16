@@ -2853,7 +2853,14 @@ async function atualizarPlaylist(newPlaylist, playlistId, estadoAnterior = {}) {
     activeMediaItem = null;
     activeMediaType = null;
     currentIndex = 0;
-    // Playlist vazia = cache nÃ£o pronto
+    // Playlist vazia = limpa IDB do namespace (remove arquivos do dispositivo)
+    navigator.serviceWorker?.controller?.postMessage({ action: "clearNamespace" });
+    // Limpa localStorage de playlist para nao recarregar conteudo antigo
+    try {
+      if (codigoAtual) localStorage.removeItem(cacheKeyFor(codigoAtual));
+      if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
+      if (playlistId) localStorage.removeItem(cacheKeyFor(playlistId));
+    } catch {}
     await atualizarStatusCache(codigoAtual, false);
     return;
   }
@@ -3943,6 +3950,11 @@ function subscribePlaylistChannel(playlistId) {
       async (payload) => {
         const evt = payload.eventType || payload.type;
 
+        // Invalida cache localStorage antes de recarregar do banco
+        if (currentPlaylistId) localStorage.removeItem(cacheKeyFor(currentPlaylistId));
+        if (codigoAtual) localStorage.removeItem(cacheKeyFor(codigoAtual));
+        if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
+
         if (evt === "DELETE" && payload?.old?.url && (payload.old.url === currentItemUrl)) {
           try { video.pause(); } catch {}
           destroyHls();
@@ -4357,7 +4369,17 @@ async function pararTudoMostrarLogin() {
   if (codigoAtual) {
     await atualizarStatusCache(codigoAtual, false);
   }
-  
+
+  // Limpar cache localStorage de playlist (evita conteudo stale ao reabrir)
+  try {
+    if (codigoAtual) localStorage.removeItem(cacheKeyFor(codigoAtual));
+    if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
+    if (currentPlaylistId) localStorage.removeItem(cacheKeyFor(currentPlaylistId));
+    Object.keys(localStorage).forEach(k => {
+      if (k.startsWith("playlist_cache_")) localStorage.removeItem(k);
+    });
+  } catch {}
+
   // Limpar variÃ¡veis
   codigoAtual = null;
   currentPlaylistId = null;
