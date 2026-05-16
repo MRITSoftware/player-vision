@@ -44,7 +44,6 @@ let dispositivosCheckTimer = null;
 let deviceCommandsChannel = null;
 let promoChannel = null;
 let cacheCheckTimer = null;
-let displayFallbackTimer = null;
 let playToken = 0;
 let currentItemUrl = null;
 let isPlaying = false;
@@ -4035,10 +4034,6 @@ function iniciarRealtime() {
   subscribeDispositivosChannel();
   subscribeDeviceCommandsChannel();
   subscribePromoChannel();
-
-  // Fallback poll a cada 30s — garante deteccao mesmo se realtime falhar
-  if (displayFallbackTimer) clearInterval(displayFallbackTimer);
-  displayFallbackTimer = setInterval(checarLockEConteudo, 30000);
 }
 
 // ===== Realtime para dispositivos =====
@@ -4320,7 +4315,6 @@ async function pararTudoMostrarLogin() {
   stopPlaybackWatchdog();
   pararPollScreenshot();
   feedFechar();
-  if (displayFallbackTimer) { clearInterval(displayFallbackTimer); displayFallbackTimer = null; }
   if (cacheCheckTimer) { clearInterval(cacheCheckTimer); cacheCheckTimer = null; }
   isLoadingVideo = false;
   playToken++;
