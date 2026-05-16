@@ -1203,24 +1203,18 @@ function buildPlaylistSignature(items) {
 }
 
 // ===== AtualizaÃ§Ã£o de Status do Cache =====
-async function atualizarStatusCache(codigo, status) {
+async function atualizarStatusCache(codigo, status, completo = null) {
   if (!codigo || !navigator.onLine) return;
-  
   try {
-    console.log(`ðŸ”„ Atualizando status do cache para ${codigo}: ${status ? 'pronto' : 'nÃ£o pronto'}`);
-    
-    const { error } = await client
-      .from("displays")
-      .update({ cache: status })
-      .eq("codigo_unico", codigo);
-    
-    if (error) {
-      console.error("âŒ Erro ao atualizar status do cache:", error);
-    } else {
-      console.log(`âœ… Status do cache atualizado: ${status ? 'pronto' : 'nÃ£o pronto'}`);
+    const updates = { cache: status };
+    if (completo !== null) {
+      updates.cache_ready = completo;
+      updates.cache_ready_at = completo ? new Date().toISOString() : null;
     }
+    const { error } = await client.from('displays').update(updates).eq('codigo_unico', codigo);
+    if (error) console.error('Erro ao atualizar status do cache:', error);
   } catch (err) {
-    console.error("âŒ Erro na conexÃ£o ao atualizar cache:", err);
+    console.error('Erro na conexao ao atualizar cache:', err);
   }
 }
 
@@ -1284,8 +1278,10 @@ async function verificarEAtualizarStatusCache() {
     const percentualVideos = totalVideos > 0 ? (videosEmCache / totalVideos) * 100 : 100;
     const percentualImagens = totalImagens > 0 ? (imagensEmCache / totalImagens) * 100 : 100;
     
-    // Cache estÃ¡ pronto se 80% dos vÃ­deos OU 80% das imagens estÃ£o em cache
-    const cachePronto = percentualVideos >= 80 || percentualImagens >= 80;
+    // Cache pronto se >= 80% (playback normal); completo se 100% (cache_ready)
+    const cachePronto  = percentualVideos >= 80 || percentualImagens >= 80;
+    const cacheCompleto = (totalVideos === 0 || videosEmCache === totalVideos) &&
+                          (totalImagens === 0 || imagensEmCache === totalImagens);
     
     console.log(`ðŸ“Š Cache de VÃ­deos: ${videosEmCache}/${totalVideos} (${percentualVideos.toFixed(1)}%)`);
     console.log(`ðŸ“Š Cache de Imagens: ${imagensEmCache}/${totalImagens} (${percentualImagens.toFixed(1)}%)`);
@@ -1309,7 +1305,7 @@ async function verificarEAtualizarStatusCache() {
     }
     
     // Atualizar status no banco
-    await atualizarStatusCache(codigoAtual, cachePronto);
+    await atualizarStatusCache(codigoAtual, cachePronto, cacheCompleto);
     
     return cachePronto;
   } catch (error) {
@@ -2679,6 +2675,8 @@ async function carregarConteudo(codigoConteudo) {
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
 
+    processarForceRecache(itens);
+
     const newPlaylist = (itens || []).map(item => {
       const itemUrl = item.url || item.urlPortrait || item.urlLandscape || "";
       const isImageType = isImageItem(item, itemUrl);
@@ -2693,6 +2691,7 @@ async function carregarConteudo(codigoConteudo) {
         feed_query:           item.feed_query           ?? null,
         feed_slides:          item.feed_slides          ?? null,
         feed_slide_duration:  item.feed_slide_duration  ?? null,
+        force_recache:        item.force_recache        ?? false,
       };
     });
 
@@ -2767,6 +2766,8 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
       .eq("playlist_id", codigoConteudo)
       .order("ordem", { ascending: true });
 
+    processarForceRecache(itens);
+
     const newPlaylist = (itens || []).map(item => {
       const itemUrl = item.url || item.urlPortrait || item.urlLandscape || "";
       const isImageType = isImageItem(item, itemUrl);
@@ -2781,6 +2782,7 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
         feed_query:           item.feed_query           ?? null,
         feed_slides:          item.feed_slides          ?? null,
         feed_slide_duration:  item.feed_slide_duration  ?? null,
+        force_recache:        item.force_recache        ?? false,
       };
     });
 
@@ -6204,6 +6206,35 @@ window.mritDebug = {
 // Se a duração retornar null, o blob está corrompido/incompleto — remove e pede recache.
 const CACHE_INTEGRITY_CHECK_DELAY_MS = 45000;
 const CACHE_INTEGRITY_MIN_DURATION_S = 0.5;
+
+// ===== Force Recache individual de item da playlist =====
+async function processarForceRecache(itens) {
+  const toRecache = (itens || []).filter(i => i.force_recache);
+  if (!toRecache.length) return;
+
+  for (const item of toRecache) {
+    const urls = [item.url, item.urlPortrait, item.urlLandscape].filter(Boolean);
+    for (const url of urls) {
+      try { await deleteCachedVideoEntries(url); } catch {}
+      try {
+        const cache = await caches.open('mrit-player-cache-v13');
+        await cache.delete(url);
+      } catch {}
+    }
+  }
+
+  // Solicitar re-download ao SW
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({ action: 'updateCache', playlist: toRecache });
+  }
+
+  // Zerar force_recache no banco
+  try {
+    const ids = toRecache.map(i => i.id).filter(Boolean);
+    if (ids.length) await client.from('playlist_itens').update({ force_recache: false }).in('id', ids);
+  } catch {}
+}
+
 let cacheIntegrityTimer = null;
 
 function agendarVerificacaoIntegridade() {
@@ -6238,6 +6269,7 @@ async function verificarIntegridadeCache() {
 
   if (urlsParaRefazer.length === 0) {
     console.log('[cache-integrity] Todos os vídeos em cache verificados e válidos.');
+    verificarEAtualizarStatusCache();
     return;
   }
 
