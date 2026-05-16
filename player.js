@@ -2095,6 +2095,19 @@ async function iniciar() {
       console.log("ðŸ” Device ID:", deviceId);
       console.log("ðŸ”— Verificando se cÃ³digo jÃ¡ estÃ¡ em uso...");
       
+      // Se displays.is_locked = false, display está livre — limpar dispositivos antigos e liberar
+      try {
+        const { data: displayCheck } = await client
+          .from("displays")
+          .select("is_locked")
+          .eq("codigo_unico", codigo)
+          .maybeSingle();
+        if (displayCheck && displayCheck.is_locked === false) {
+          console.log("✅ Display livre (is_locked=false) — limpando dispositivos antigos");
+          await client.from("dispositivos").update({ is_ativo: false }).eq("codigo_display", codigo);
+        }
+      } catch {}
+
       // VERIFICAR PRIMEIRO: Se o cÃ³digo jÃ¡ estÃ¡ sendo usado por outro dispositivo
       const { codigoEmUso, error: checkError } = await obterCodigoEmUsoPorOutroDispositivo(codigo, deviceId);
       
