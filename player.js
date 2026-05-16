@@ -2688,8 +2688,11 @@ async function carregarConteudo(codigoConteudo) {
         duration: isImageType ? 15000 : null,
         fit: item.fit ?? null,
         focus: item.focus ?? null,
-        urlPortrait: item.urlPortrait ?? null,
-        urlLandscape: item.urlLandscape ?? null,
+        urlPortrait:          item.urlPortrait          ?? null,
+        urlLandscape:         item.urlLandscape         ?? null,
+        feed_query:           item.feed_query           ?? null,
+        feed_slides:          item.feed_slides          ?? null,
+        feed_slide_duration:  item.feed_slide_duration  ?? null,
       };
     });
 
@@ -2773,8 +2776,11 @@ async function verificarMudancasPlaylistEmBackground(codigoConteudo, cachedPlayl
         duration: isImageType ? 15000 : null,
         fit: item.fit ?? null,
         focus: item.focus ?? null,
-        urlPortrait: item.urlPortrait ?? null,
-        urlLandscape: item.urlLandscape ?? null,
+        urlPortrait:          item.urlPortrait          ?? null,
+        urlLandscape:         item.urlLandscape         ?? null,
+        feed_query:           item.feed_query           ?? null,
+        feed_slides:          item.feed_slides          ?? null,
+        feed_slide_duration:  item.feed_slide_duration  ?? null,
       };
     });
 
