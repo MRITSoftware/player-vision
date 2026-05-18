@@ -5232,23 +5232,36 @@ async function verificarComandosDispositivo() {
     const deviceId = gerarDeviceId();
     
     // Buscar comandos pendentes para este dispositivo
-    const { data: comandos, error } = await client
+    let { data: comandos, error } = await client
       .from("device_commands")
       .select("id, command, executed, payload")
       .eq("device_id", deviceId)
       .eq("executed", false)
       .order("created_at", { ascending: true })
       .limit(10);
-    
-    if (error) {
-      // Se tabela nÃ£o existir, ignorar (retrocompatibilidade)
-      if (error.message && error.message.includes('relation') && error.message.includes('does not exist')) {
+
+    // Fallback: coluna payload ainda nao existe no banco
+    if (error && error.message && error.message.includes('does not exist')) {
+      const { data: d2, error: e2 } = await client
+        .from("device_commands")
+        .select("id, command, executed")
+        .eq("device_id", deviceId)
+        .eq("executed", false)
+        .order("created_at", { ascending: true })
+        .limit(10);
+      if (e2) {
+        if (e2.message && e2.message.includes('does not exist')) return;
+        console.warn("Erro ao verificar comandos:", e2);
         return;
       }
-      console.warn("âš ï¸ Erro ao verificar comandos:", error);
+      comandos = d2;
+      error = null;
+    }
+
+    if (error) {
+      console.warn("Erro ao verificar comandos:", error);
       return;
     }
-    
     if (!comandos || comandos.length === 0) return;
     
     // Processar cada comando
