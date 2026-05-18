@@ -7120,12 +7120,14 @@ async function _cacheDbgRefresh() {
     });
   } catch {}
 
-  // SW cache: contar entradas do namespace
+  // SW cache: contar total de entradas (URLs de imagens não contêm o codigo do display)
   let swCount = 0;
+  let swCountNs = 0;
   try {
     const cache = await caches.open('mrit-player-cache-v13');
     const keys  = await cache.keys();
-    swCount = keys.filter(r => r.url.includes(codigo)).length;
+    swCount   = keys.length;
+    swCountNs = keys.filter(r => r.url.includes(codigo)).length;
   } catch {}
 
   const hora = new Date().toLocaleTimeString('pt-BR');
@@ -7137,7 +7139,7 @@ async function _cacheDbgRefresh() {
     '<hr style="margin:3px 0;border-color:#444">' +
     '<div>localStorage: ' + lsStatus + '</div>' +
     '<div>IDB vídeos: '   + idbCount + ' entradas</div>' +
-    '<div>SW imagens: '   + swCount  + ' entradas</div>' +
+    '<div>SW imagens: '   + swCount  + ' total (' + swCountNs + ' deste display)</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
     '<div style="margin-top:2px;font-size:10px;opacity:0.6">atualizado: ' + hora + '</div>';
 }
