@@ -10,7 +10,11 @@
 
 const supabaseUrl = "https://base.muraltv.com.br";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUyODA3NjAwLCJleHAiOjE5MTA1NzQwMDB9.P4goMdCvXKPk9ViLYlSUk7nR_zeW3yUw5ixjv7Mk99g";
-const client = supabase.createClient(supabaseUrl, supabaseKey);
+const client = supabase.createClient(supabaseUrl, supabaseKey, {
+  realtime: {
+    transport: XMLHttpRequest, // long-polling em vez de WebSocket (contorna Kong sem WS upgrade)
+  }
+});
 
 // ===== Constantes/estado =====
 const PLAYER_VERSION = '2.0';
