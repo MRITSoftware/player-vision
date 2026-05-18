@@ -5103,7 +5103,7 @@ async function checarLockEConteudo() {
     // Buscar com device_id para verificar se Ã© o mesmo dispositivo
     let { data, error } = await client
       .from("displays")
-      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache")
+      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache,limpar_conteudo")
       .eq("codigo_unico", codigoAtual)
       .maybeSingle();
 
@@ -5119,11 +5119,20 @@ async function checarLockEConteudo() {
 
     if (!data) return;
 
-    // limpar_cache = true => painel/SQL solicitou limpeza
+    // limpar_cache = true => painel/SQL solicitou limpeza total
     if (data.limpar_cache === true) {
       console.log('[poll] limpar_cache detectado, limpando...');
       try { await client.from('displays').update({ limpar_cache: false }).eq('codigo_unico', codigoAtual); } catch {}
       await limparCacheAtualEReload();
+      return;
+    }
+
+    // limpar_conteudo = 'CODIGO' => limpar só o cache de um conteúdo específico
+    if (data.limpar_conteudo) {
+      const alvo = data.limpar_conteudo;
+      console.log('[poll] limpar_conteudo detectado:', alvo);
+      try { await client.from('displays').update({ limpar_conteudo: null }).eq('codigo_unico', codigoAtual); } catch {}
+      await limparCacheConteudo(alvo);
       return;
     }
 
