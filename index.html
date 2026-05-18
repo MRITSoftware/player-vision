@@ -287,7 +287,35 @@
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <!-- Capacitor para funcionalidades nativas (APK) -->
   <script type="module" src="/capacitor-setup.js"></script>
-  <script src="player.js"></script>
+  <script>
+  (function() {
+    function loadScript(src) {
+      var s = document.createElement('script');
+      s.src = src;
+      document.head.appendChild(s);
+    }
+    try {
+      var req = indexedDB.open('mrit-player-ota', 1);
+      req.onupgradeneeded = function(e) { e.target.result.createObjectStore('scripts'); };
+      req.onsuccess = function(e) {
+        var tx = e.target.result.transaction('scripts', 'readonly');
+        var get = tx.objectStore('scripts').get('player.js');
+        get.onsuccess = function(e) {
+          if (e.target.result) {
+            var blob = new Blob([e.target.result], { type: 'application/javascript' });
+            loadScript(URL.createObjectURL(blob));
+          } else {
+            loadScript('player.js');
+          }
+        };
+        get.onerror = function() { loadScript('player.js'); };
+      };
+      req.onerror = function() { loadScript('player.js'); };
+    } catch(e) {
+      loadScript('player.js');
+    }
+  })();
+  </script>
 
   <script>
     // Forçar fullscreen permanente quando app carregar

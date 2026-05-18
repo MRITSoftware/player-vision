@@ -678,6 +678,87 @@ const DEVICE_ID_KEY = 'mrit_device_id';
 const RESTARTING_KEY = 'mrit_is_restarting'; // sessionStorage - indica que estÃ¡ reiniciando
 const DISPOSITIVO_STALE_MS = 15 * 60 * 1000;
 
+// ===== OTA Update System =====
+const OTA_VERSION_KEY = 'mrit_ota_version';
+
+function otaIdbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('mrit-player-ota', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('scripts');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function otaIdbSave(text) {
+  const db = await otaIdbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('scripts', 'readwrite');
+    tx.objectStore('scripts').put(text, 'player.js');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function checkOTAUpdate() {
+  if (!navigator.onLine) return;
+  const deviceId = localStorage.getItem(DEVICE_ID_KEY);
+  const codigo = codigoAtual || localStorage.getItem(CODIGO_DISPLAY_KEY);
+  const versaoInstalada = localStorage.getItem(OTA_VERSION_KEY) || '0';
+  try {
+    let data = null;
+    if (deviceId) {
+      const { data: d } = await client.from('app_versions')
+        .select('version, bundle_url')
+        .eq('target_device_id', deviceId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      data = d;
+    }
+    if (!data && codigo) {
+      const { data: d } = await client.from('app_versions')
+        .select('version, bundle_url')
+        .eq('target_codigo', codigo)
+        .is('target_device_id', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      data = d;
+    }
+    if (!data) {
+      const { data: d } = await client.from('app_versions')
+        .select('version, bundle_url')
+        .is('target_codigo', null)
+        .is('target_device_id', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      data = d;
+    }
+    if (!data || data.version === versaoInstalada) return;
+    console.log(`[OTA] versao ${data.version} disponivel (atual: ${versaoInstalada})`);
+    await applyOTAUpdate(data.bundle_url, data.version);
+  } catch (e) {
+    console.warn('[OTA] check falhou:', e);
+  }
+}
+
+async function applyOTAUpdate(url, version) {
+  try {
+    console.log('[OTA] baixando...');
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const text = await resp.text();
+    await otaIdbSave(text);
+    localStorage.setItem(OTA_VERSION_KEY, version);
+    console.log(`[OTA] versao ${version} salva. Recarregando...`);
+    setTimeout(() => window.location.reload(), 1500);
+  } catch (e) {
+    console.error('[OTA] falha:', e);
+  }
+}
+
 // ===== Gerar ID Ãºnico do dispositivo =====
 // IMPORTANTE: O device_id deve ser PERSISTENTE e ÃšNICO por dispositivo fÃ­sico
 // NÃƒO deve mudar mesmo apÃ³s reinstalar o app ou limpar cache
@@ -811,7 +892,11 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-document.addEventListener('DOMContentLoaded', function() {
+function onDOMReady(fn) {
+  if (document.readyState !== 'loading') { fn(); } else { document.addEventListener('DOMContentLoaded', fn); }
+}
+
+onDOMReady(function() {
   ensureElementsVisible();
   
   // Verificar localStorage PRIMEIRO (busca rÃ¡pida)
@@ -864,7 +949,8 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Verificar se jÃ¡ existe um cÃ³digo salvo e iniciar automaticamente
   verificarCodigoSalvo();
-  
+  setTimeout(() => checkOTAUpdate(), 10000);
+
   // Listener para mudanÃ§as no fullscreen - usar novo sistema de monitoramento
   const verificarFullscreenEreativar = () => {
     const codigoSalvo = localStorage.getItem(CODIGO_DISPLAY_KEY);
@@ -4883,6 +4969,10 @@ async function verificarComandosDispositivo() {
           console.log("🧹 Limpando cache remotamente e recarregando conteúdo...");
           await limparCacheAtualEReload();
           return;
+        } else if (commandName === 'update_app') {
+          await marcarComandoExecutado();
+          console.log('[OTA] comando update_app recebido');
+          await checkOTAUpdate();
         } else {
           // Outros comandos podem ser adicionados aqui
           console.log("â„¹ï¸ Comando nÃ£o implementado:", commandName);

@@ -1,0 +1,91 @@
+name: OTA Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'player.js'
+
+  workflow_dispatch:
+    inputs:
+      target_codigo:
+        description: 'Código do display alvo (vazio = todos)'
+        required: false
+        default: ''
+      target_device_id:
+        description: 'Device ID alvo (vazio = todos)'
+        required: false
+        default: ''
+      version_suffix:
+        description: 'Sufixo de versão extra (opcional)'
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gerar versão
+        id: version
+        run: |
+          VERSION=$(date +%Y%m%d%H%M)-$(git rev-parse --short HEAD)
+          if [ -n "${{ github.event.inputs.version_suffix }}" ]; then
+            VERSION="${VERSION}-${{ github.event.inputs.version_suffix }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Versão: $VERSION"
+
+      - name: Upload player.js para Supabase Storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          FILENAME="player-${VERSION}.js"
+
+          curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST "$SUPABASE_URL/storage/v1/object/ota-scripts/$FILENAME" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/javascript" \
+            --data-binary @player.js | grep -E "^(200|201)$" \
+            && echo "Upload OK: $FILENAME" \
+            || { echo "ERRO no upload"; exit 1; }
+
+          echo "bundle_url=$SUPABASE_URL/storage/v1/object/public/ota-scripts/$FILENAME" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_ENV
+
+      - name: Registrar versão no Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          TARGET_CODIGO="${{ github.event.inputs.target_codigo }}"
+          TARGET_DEVICE="${{ github.event.inputs.target_device_id }}"
+
+          if [ -n "$TARGET_DEVICE" ]; then
+            PAYLOAD="{\"version\":\"$version\",\"bundle_url\":\"$bundle_url\",\"target_device_id\":\"$TARGET_DEVICE\"}"
+          elif [ -n "$TARGET_CODIGO" ]; then
+            PAYLOAD="{\"version\":\"$version\",\"bundle_url\":\"$bundle_url\",\"target_codigo\":\"$TARGET_CODIGO\"}"
+          else
+            PAYLOAD="{\"version\":\"$version\",\"bundle_url\":\"$bundle_url\"}"
+          fi
+
+          curl -sS -o /dev/null -w "%{http_code}" \
+            -X POST "$SUPABASE_URL/rest/v1/app_versions" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "$PAYLOAD" | grep -E "^(200|201)$" \
+            && echo "Versao registrada: $version" \
+            || { echo "ERRO ao registrar versao"; exit 1; }
+
+      - name: Resumo
+        run: |
+          echo "### OTA Deploy concluido" >> $GITHUB_STEP_SUMMARY
+          echo "- **Versao:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Alvo:** ${{ github.event.inputs.target_codigo || github.event.inputs.target_device_id || 'Todos os players' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bundle:** $bundle_url" >> $GITHUB_STEP_SUMMARY
