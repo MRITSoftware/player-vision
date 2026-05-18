@@ -13,6 +13,8 @@ const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsIm
 const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
+const PLAYER_VERSION = '2.0';
+const POLLING_MS = 15000; // polling de segurança a cada 15s (complementa o realtime)
 
 // ===== ConfiguraÃ§Ãµes de Buffering =====
 // Modos disponÃ­veis:
@@ -43,6 +45,7 @@ let dispositivosChannel = null;
 let dispositivosCheckTimer = null;
 let deviceCommandsChannel = null;
 let promoChannel = null;
+let pollTimer = null;
 let cacheCheckTimer = null;
 let playToken = 0;
 let currentItemUrl = null;
@@ -545,6 +548,7 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
   let lastTime = -1;
   let lastProgressAt = Date.now();
   let lastPausedAt = null;
+  let pauseAttempts = 0; // acumula entre episódios — não reseta com breve unpausing
 
   playbackWatchdogTimer = setInterval(() => {
     if (token !== playToken) {
@@ -554,15 +558,25 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
     if (!videoEl || videoEl.style.display === "none") return;
 
     if (videoEl.paused) {
-      if (!lastPausedAt) lastPausedAt = Date.now();
-      const pausedFor = Date.now() - lastPausedAt;
+      const now = Date.now();
+      if (!lastPausedAt) lastPausedAt = now;
+      const pausedFor = now - lastPausedAt;
+
       if (pausedFor >= 4000) {
-        console.warn("[watchdog] video pausado por " + (pausedFor / 1000).toFixed(1) + "s, tentando retomar...");
-        lastPausedAt = Date.now();
+        pauseAttempts++;
+        if (pauseAttempts > 3) {
+          console.warn("[watchdog] " + pauseAttempts + " tentativas de retomada falharam, pulando item");
+          stopPlaybackWatchdog();
+          isPlaying = false;
+          proximoItem();
+          return;
+        }
+        console.warn("[watchdog] video pausado " + (pausedFor / 1000).toFixed(1) + "s, tentando retomar (tentativa " + pauseAttempts + "/3)...");
+        lastPausedAt = now;
         videoEl.play()
           .then(() => { lastPausedAt = null; lastProgressAt = Date.now(); })
           .catch(() => {
-            console.warn("[watchdog] nao conseguiu retomar, pulando item");
+            console.warn("[watchdog] retomada rejeitada, pulando item");
             stopPlaybackWatchdog();
             isPlaying = false;
             proximoItem();
@@ -724,7 +738,7 @@ async function checkOTAUpdate() {
   if (!navigator.onLine) return;
   const deviceId = localStorage.getItem(DEVICE_ID_KEY);
   const codigo = codigoAtual || localStorage.getItem(CODIGO_DISPLAY_KEY);
-  const versaoInstalada = localStorage.getItem(OTA_VERSION_KEY) || '0';
+  const versaoInstalada = localStorage.getItem(OTA_VERSION_KEY) || PLAYER_VERSION;
   try {
     let data = null;
     if (deviceId) {
@@ -903,12 +917,59 @@ async function obterCodigoEmUsoPorOutroDispositivo(codigo, deviceIdAtual) {
   return { codigoEmUso, error: null };
 }
 
-// Garantir que elementos estejam visÃ­veis quando a pÃ¡gina carregar
-// Reconecta canais realtime quando app volta do background (critico no Android)
+function mostrarBannerAtualizacao() {
+  try {
+    const otaVersion = localStorage.getItem(OTA_VERSION_KEY);
+    const lastSeen = localStorage.getItem('mrit_last_seen_version');
+    if (!otaVersion || otaVersion === lastSeen) return;
+    localStorage.setItem('mrit_last_seen_version', otaVersion);
+  } catch { return; }
+
+  const banner = document.createElement('div');
+  banner.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:9999',
+    'display:flex', 'align-items:center', 'justify-content:center',
+    'pointer-events:none', 'opacity:1',
+    'transition:opacity 1s ease',
+  ].join(';');
+
+  const txt = document.createElement('span');
+  txt.textContent = 'App atualizado';
+  txt.style.cssText = [
+    'color:#fff', 'font-size:22px', 'font-weight:600',
+    'letter-spacing:2px', 'text-shadow:0 2px 8px rgba(0,0,0,0.7)',
+  ].join(';');
+
+  banner.appendChild(txt);
+  document.body.appendChild(banner);
+
+  setTimeout(() => {
+    banner.style.opacity = '0';
+    setTimeout(() => { try { document.body.removeChild(banner); } catch {} }, 1000);
+  }, 15000);
+}
+
+// Reconecta canais realtime e retoma vídeo quando app volta do background (crítico no Android)
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && codigoAtual && realtimeReady) {
-    console.log('[realtime] app voltou ao foreground, reconectando canais...');
-    iniciarRealtime();
+  if (document.visibilityState !== 'visible') return;
+
+  // Retomar vídeo pausado pelo WebView ao ir para background
+  if (isPlaying && video && video.paused && !video.ended && video.style.display !== 'none') {
+    console.log('[visibility] vídeo pausado pelo sistema, retomando...');
+    video.play().catch(err => {
+      console.warn('[visibility] falha ao retomar vídeo:', err?.name);
+    });
+  }
+
+  // Reconectar canais realtime apenas se necessário (evita rajada de WebSocket toda vez)
+  if (codigoAtual && realtimeReady) {
+    const channelState = displaysChannel?.state;
+    if (!displaysChannel || channelState === 'errored' || channelState === 'closed') {
+      console.log('[realtime] app voltou ao foreground, reconectando canais (estado: ' + channelState + ')...');
+      iniciarRealtime();
+    } else {
+      console.log('[realtime] app voltou ao foreground, canais ok (estado: ' + channelState + ')');
+    }
   }
 });
 
@@ -969,6 +1030,7 @@ onDOMReady(function() {
   
   // Verificar se jÃ¡ existe um cÃ³digo salvo e iniciar automaticamente
   verificarCodigoSalvo();
+  mostrarBannerAtualizacao();
   setTimeout(() => checkOTAUpdate(), 10000);
 
   // Listener para mudanÃ§as no fullscreen - usar novo sistema de monitoramento
@@ -1130,16 +1192,26 @@ function destroyHls() {
 }
 
 // ===== IndexedDB Helpers (para MP4 IDB flow) =====
+// Conexão IDB compartilhada — abre uma vez e reutiliza para evitar acúmulo de conexões
+// que trava o IDB no Android WebView após alguns minutos de operação.
+let _idbConnPromise = null;
 function idbOpen() {
-  return new Promise((resolve, reject) => {
+  if (_idbConnPromise) return _idbConnPromise;
+  _idbConnPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open("mrit-player-idb", 1);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => { _idbConnPromise = null; };
+      db.onversionchange = () => { db.close(); _idbConnPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => { _idbConnPromise = null; reject(req.error); };
   });
+  return _idbConnPromise;
 }
 
 async function idbSet(key, blob) {
@@ -1265,13 +1337,41 @@ async function findCachedImageBlobLocal(url) {
   return null;
 }
 
+// Se o IDB travar, desabilita leituras de blob pelo resto da sessão para não bloquear playback
+let idbPlaybackAvailable = true;
+let idbPlaybackDisabledAt = 0;
+const IDB_PLAYBACK_RETRY_MS = 5 * 60 * 1000;
+
 async function getPlayableCachedSource(url, mediaType) {
   if (!codigoAtual || !url) return null;
 
+  // Se IDB travou recentemente, pula imediatamente (sem delay por item)
+  if (!idbPlaybackAvailable) {
+    if (Date.now() - idbPlaybackDisabledAt < IDB_PLAYBACK_RETRY_MS) return null;
+    idbPlaybackAvailable = true;
+    console.log('[cache] reabilitando leitura IDB após 5 min');
+  }
+
   try {
-    const blob = mediaType === "video"
-      ? await findCachedVideoBlobLocal(url)
-      : await findCachedImageBlobLocal(url);
+    let timedOut = false;
+    let timeoutId;
+    const timeoutPromise = new Promise((resolve) => {
+      timeoutId = setTimeout(() => { timedOut = true; resolve(null); }, 2000);
+    });
+
+    const readPromise = mediaType === "video"
+      ? findCachedVideoBlobLocal(url)
+      : findCachedImageBlobLocal(url);
+
+    const blob = await Promise.race([readPromise, timeoutPromise]);
+    clearTimeout(timeoutId);
+
+    if (timedOut) {
+      console.warn('[cache] IDB demorou >2s, desabilitando cache local por esta sessão');
+      idbPlaybackAvailable = false;
+      idbPlaybackDisabledAt = Date.now();
+      return null;
+    }
 
     if (!blob || blob.size <= 0) return null;
     return trackObjectUrl(URL.createObjectURL(blob));
@@ -2665,6 +2765,9 @@ async function iniciar() {
       realtimeReady = true;
     }
 
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(checarLockEConteudo, POLLING_MS);
+
   // VerificaÃ§Ã£o periÃ³dica do cache (a cada 60 segundos)
   if (cacheCheckTimer) clearInterval(cacheCheckTimer);
   cacheCheckTimer = setInterval(async () => {
@@ -3277,7 +3380,7 @@ async function tocarLoop() {
   const isVideo = isVideoItem(item, itemUrl);
   activeMediaItem = item;
   activeMediaType = isVideo ? "video" : "image";
-  const preferLocalCachePlayback = !navigator.onLine || !navigator.serviceWorker.controller;
+  const preferLocalCachePlayback = true; // sempre tenta blob do IDB primeiro; cai para rede se não estiver em cache
 
   const myToken = ++playToken;
   const duration = (item.duration !== undefined) ? item.duration : (isVideo ? null : 15000);
@@ -3417,6 +3520,7 @@ async function tocarLoop() {
 
       let didSwap = false;
       let swapFallbackId = null;
+      let startupWatchdogId = null;
       const finalizeSwap = () => {
         if (didSwap) return;
         if (myToken !== playToken || videoToken !== currentVideoToken) return;
@@ -3424,6 +3528,10 @@ async function tocarLoop() {
         if (swapFallbackId) {
           clearTimeout(swapFallbackId);
           swapFallbackId = null;
+        }
+        if (startupWatchdogId) {
+          clearTimeout(startupWatchdogId);
+          startupWatchdogId = null;
         }
         nextVideo.classList.remove("hidden-ready");
         nextVideo.style.opacity = "1";
@@ -3459,11 +3567,28 @@ async function tocarLoop() {
         if (!nextVideo.paused && nextVideo.readyState >= 3) finalizeSwap();
       }, 450);
 
+      // Watchdog de startup: se o evento 'playing' nunca disparar (buffering eterno),
+      // pula o item para evitar tela congelada
+      startupWatchdogId = setTimeout(() => {
+        if (myToken !== playToken || didSwap) return;
+        console.warn("[playback] video nao iniciou (buffering eterno), pulando:", itemUrl);
+        nextVideo.removeEventListener("playing", onSwapReady);
+        nextVideo.removeEventListener("timeupdate", onSwapReady);
+        if (swapFallbackId) { clearTimeout(swapFallbackId); swapFallbackId = null; }
+        nextVideo.style.display = "none";
+        nextVideo.classList.remove("hidden-ready");
+        stopPlaybackWatchdog();
+        isPlaying = false;
+        registerItemFailure(itemUrl, "startup_timeout");
+        proximoItem();
+      }, 15000);
+
       nextVideo.play().catch(() => {
         nextVideo.muted = true;
         nextVideo.play().catch(() => {
           nextVideo.removeEventListener("playing", onSwapReady);
           nextVideo.removeEventListener("timeupdate", onSwapReady);
+          if (startupWatchdogId) { clearTimeout(startupWatchdogId); startupWatchdogId = null; }
           if (swapFallbackId) {
             clearTimeout(swapFallbackId);
             swapFallbackId = null;
@@ -3532,10 +3657,15 @@ async function tocarLoop() {
       nextVideo.addEventListener('pause', function onUnexpectedPause() {
         if (myToken !== playToken) { nextVideo.removeEventListener('pause', onUnexpectedPause); return; }
         if (!isPlaying || nextVideo.ended) return;
-        setTimeout(() => {
+        // Tenta retomar imediatamente (ex: volta do background). O watchdog é o safety net.
+        const tryResume = (attempt) => {
           if (myToken !== playToken || !nextVideo.paused || !isPlaying || nextVideo.ended) return;
-          nextVideo.play().catch(() => {});
-        }, 500);
+          nextVideo.play().catch(err => {
+            console.warn('[playback] retomada falhou (tentativa ' + attempt + '):', err?.name);
+            if (attempt < 3) setTimeout(() => tryResume(attempt + 1), 800);
+          });
+        };
+        setTimeout(() => tryResume(1), 200);
       });
 
     } catch (e) {
@@ -3715,14 +3845,17 @@ function getAdaptiveTimeout(baseTimeout) {
 function waitForCanPlay(videoEl, timeoutMs = 7000) {
   return new Promise(async (resolve) => {
     if (videoEl.readyState >= 3) return resolve(true);
-    
+
     // Ajustar timeout baseado na velocidade de rede
     const adaptiveTimeout = await detectNetworkSpeed().then(speed => {
       if (speed === 'slow') return timeoutMs * 3;
       if (speed === 'fast') return timeoutMs * 0.7;
       return timeoutMs;
     });
-    
+
+    // Verificar novamente — o evento canplay pode ter disparado durante a detecção de rede
+    if (videoEl.readyState >= 3) return resolve(true);
+
     let done = false;
     const onCanPlay = () => { if (!done) { done = true; cleanup(); resolve(true); } };
     const t = setTimeout(() => { if (!done) { done = true; cleanup(); resolve(false); } }, adaptiveTimeout);
@@ -3780,7 +3913,12 @@ function waitForBuffer(videoEl, minBufferSeconds, timeoutMs = 15000) {
       if (speed === 'fast') return timeoutMs * 0.8;
       return timeoutMs;
     });
-    
+
+    // Verificar novamente após detecção de rede (pode ter carregado durante esse tempo)
+    if (hasEnoughBuffer(videoEl, minBufferSeconds) || videoEl.readyState >= 4) {
+      return resolve(true);
+    }
+
     let done = false;
     let checkInterval = null;
     let timeoutId = null;
@@ -3864,10 +4002,13 @@ function waitForLoaded(videoEl, timeoutMs = 30000) {
       if (speed === 'fast') return timeoutMs * 0.8;
       return timeoutMs;
     });
-    
+
+    // Verificar novamente após detecção de rede
+    if (videoEl.readyState >= 4) return resolve(true);
+
     let done = false;
     let timeoutId = null;
-    
+
     const onLoaded = () => {
       if (!done && videoEl.readyState >= 4) {
         done = true;

@@ -47,8 +47,12 @@ const nsKeyFor = (ns, url) => `${ns}::${url}`;
 let cacheUpdateChain = Promise.resolve();
 
 // ===== IndexedDB Helpers =====
+// Conexão compartilhada — abre uma vez e reutiliza. Múltiplas conexões simultâneas
+// acumulam no Android WebView e travam o IDB após poucos minutos.
+let _idbConnPromise = null;
 function idbOpen() {
-  return new Promise((resolve, reject) => {
+  if (_idbConnPromise) return _idbConnPromise;
+  _idbConnPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -56,9 +60,15 @@ function idbOpen() {
         db.createObjectStore(DB_STORE); // key: `${ns}::${url}`, value: Blob
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => { _idbConnPromise = null; };
+      db.onversionchange = () => { db.close(); _idbConnPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => { _idbConnPromise = null; reject(req.error); };
   });
+  return _idbConnPromise;
 }
 
 async function idbGet(key) {
