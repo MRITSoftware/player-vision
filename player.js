@@ -5012,10 +5012,10 @@ async function checarLockEConteudo() {
     // Buscar com device_id para verificar se Ã© o mesmo dispositivo
     let { data, error } = await client
       .from("displays")
-      .select("is_locked,codigo_conteudoAtual,device_id,orientacao")
+      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache")
       .eq("codigo_unico", codigoAtual)
       .maybeSingle();
-    
+
     // Se nÃ£o encontrou device_id, tentar sem ele (retrocompatibilidade)
     if (error && error.message && error.message.includes('column') && error.message.includes('does not exist')) {
       const { data: dataBasica } = await client
@@ -5027,6 +5027,14 @@ async function checarLockEConteudo() {
     }
 
     if (!data) return;
+
+    // limpar_cache = true => painel/SQL solicitou limpeza
+    if (data.limpar_cache === true) {
+      console.log('[poll] limpar_cache detectado, limpando...');
+      try { await client.from('displays').update({ limpar_cache: false }).eq('codigo_unico', codigoAtual); } catch {}
+      await limparCacheAtualEReload();
+      return;
+    }
 
     // Verificar se Ã© o mesmo dispositivo
     const mesmoDispositivo = data.device_id && data.device_id === deviceId;
