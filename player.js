@@ -1032,6 +1032,7 @@ onDOMReady(function() {
   verificarCodigoSalvo();
   mostrarBannerAtualizacao();
   setTimeout(() => checkOTAUpdate(), 10000);
+  initRtDebugOverlay();
 
   // Listener para mudanÃ§as no fullscreen - usar novo sistema de monitoramento
   const verificarFullscreenEreativar = () => {
@@ -4256,6 +4257,7 @@ function subscribePlaylistChannel(playlistId) {
       }
     )
     .subscribe((status, err) => {
+      rtDbgUpdate('playlist', status);
       if (status === 'SUBSCRIBED') {
         console.log('[realtime] playlist_itens conectado');
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -4288,6 +4290,7 @@ function iniciarRealtime() {
         } catch (err) {}
 
         // Filtro ja garante que e este display — nao precisa checar codigo_unico no payload
+        rtDbgUpdate('displays', 'SUBSCRIBED', 'evt recebido');
 
         // is_locked = false => exibicao parada
         const isLocked = payload.new.is_locked;
@@ -4335,6 +4338,7 @@ function iniciarRealtime() {
       }
     )
     .subscribe((status, err) => {
+      rtDbgUpdate('displays', status);
       if (status === 'SUBSCRIBED') {
         console.log('[realtime] displays conectado');
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -4442,6 +4446,7 @@ function subscribeDispositivosChannel() {
         }
       )
       .subscribe((status) => {
+        rtDbgUpdate('dispositivos', status);
         if (status === 'SUBSCRIBED') {
           console.log("âœ… Realtime conectado - dispositivos (SUBSCRIBED)");
         } else if (status === 'CHANNEL_ERROR') {
@@ -4492,6 +4497,7 @@ function subscribeDeviceCommandsChannel() {
         }
       })
       .subscribe((status, err) => {
+        rtDbgUpdate('cmds', status);
         if (status === 'SUBSCRIBED') {
           console.log('[realtime] device_commands conectado');
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -4522,6 +4528,7 @@ function subscribePromoChannel() {
         await verificarPromocaoContinuamente();
       })
       .subscribe((status, err) => {
+        rtDbgUpdate('promo', status);
         if (status === 'SUBSCRIBED') {
           console.log('[realtime] promo conectado');
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -4996,6 +5003,7 @@ function mostrarLogin() {
 
 async function checarLockEConteudo() {
   if (!codigoAtual || !navigator.onLine) return;
+  rtDbgPollTick();
   try {
     const deviceId = gerarDeviceId();
     
@@ -7023,4 +7031,63 @@ async function tocarFeedItem(item, token) {
   } else {
     if (ov) ov.innerHTML = '<span style="color:#e55;font-size:clamp(0.8rem,2vmin,1rem)">Sem notícias disponíveis</span>';
   }
+}
+
+// ===== Debug Overlay — status do Realtime =====
+// Ativar: toque 5x no canto superior direito da tela
+const _rtDbg = { displays: '⏳', playlist: '—', dispositivos: '⏳', cmds: '⏳', promo: '⏳', poll: '—', evt: '—' };
+let _rtDbgEl = null, _rtDbgTaps = 0, _rtDbgTimer = null, _rtDbgVisible = false;
+
+function rtDbgUpdate(channel, status, evtLabel) {
+  const icon = status === 'SUBSCRIBED' ? '🟢' :
+               (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') ? '🔴' :
+               status === 'CLOSED' ? '⚫' : '🟡';
+  _rtDbg[channel] = icon + ' ' + status;
+  if (evtLabel) _rtDbg.evt = evtLabel + ' ' + new Date().toLocaleTimeString('pt-BR');
+  _rtDbgRender();
+}
+
+function rtDbgPollTick() {
+  _rtDbg.poll = new Date().toLocaleTimeString('pt-BR');
+  _rtDbgRender();
+}
+
+function _rtDbgRender() {
+  if (!_rtDbgEl) return;
+  _rtDbgEl.innerHTML =
+    '<b style="display:block;margin-bottom:3px;font-size:11px">REALTIME DEBUG</b>' +
+    '<div>displays: '     + _rtDbg.displays     + '</div>' +
+    '<div>playlist: '     + _rtDbg.playlist     + '</div>' +
+    '<div>dispositivos: ' + _rtDbg.dispositivos + '</div>' +
+    '<div>cmds: '         + _rtDbg.cmds         + '</div>' +
+    '<div>promo: '        + _rtDbg.promo        + '</div>' +
+    '<hr style="margin:3px 0;border-color:#444">' +
+    '<div>poll: '         + _rtDbg.poll         + '</div>' +
+    '<div>evt: '          + _rtDbg.evt          + '</div>' +
+    '<div style="margin-top:4px;font-size:9px;opacity:0.5">5x canto sup-dir p/ fechar</div>';
+}
+
+function initRtDebugOverlay() {
+  _rtDbgEl = document.createElement('div');
+  _rtDbgEl.style.cssText =
+    'position:fixed;top:8px;right:8px;background:rgba(0,0,0,0.85);color:#eee;' +
+    'font-family:monospace;font-size:12px;line-height:1.7;padding:8px 12px;' +
+    'border-radius:6px;z-index:99999;display:none;min-width:200px;pointer-events:none;';
+  document.body.appendChild(_rtDbgEl);
+  _rtDbgRender();
+
+  const hit = document.createElement('div');
+  hit.style.cssText = 'position:fixed;top:0;right:0;width:70px;height:70px;z-index:100000;';
+  hit.addEventListener('click', () => {
+    _rtDbgTaps++;
+    clearTimeout(_rtDbgTimer);
+    if (_rtDbgTaps >= 5) {
+      _rtDbgTaps = 0;
+      _rtDbgVisible = !_rtDbgVisible;
+      _rtDbgEl.style.display = _rtDbgVisible ? 'block' : 'none';
+    } else {
+      _rtDbgTimer = setTimeout(() => { _rtDbgTaps = 0; }, 2000);
+    }
+  });
+  document.body.appendChild(hit);
 }
