@@ -3245,17 +3245,56 @@ async function limparCacheAtualEReload() {
     currentPlaylistId,
   });
 
+  // 1. localStorage
   try {
     if (codigoAtual) localStorage.removeItem(cacheKeyFor(codigoAtual));
     if (currentContentCode) localStorage.removeItem(cacheKeyFor(currentContentCode));
     if (currentPlaylistId) localStorage.removeItem(cacheKeyFor(currentPlaylistId));
   } catch {}
 
+  // 2. SW clearNamespace (best-effort, não bloqueia se SW inativo no Android)
   try {
     await postServiceWorkerMessage("clearNamespace", {}, true);
-  } catch (err) {
-    console.warn("⚠️ Falha ao aguardar limpeza do cache no Service Worker:", err?.message || err);
+  } catch {
     navigator.serviceWorker?.controller?.postMessage({ action: "clearNamespace" });
+  }
+
+  // 3. IDB: apagar todas as entradas do namespace atual
+  try {
+    const ns = codigoAtual;
+    if (ns) {
+      const db = await idbOpen();
+      await new Promise((res) => {
+        const tx  = db.transaction('videos', 'readwrite');
+        const store = tx.objectStore('videos');
+        const req = store.getAllKeys();
+        req.onsuccess = () => {
+          const keys = (req.result || []).filter(k => k.startsWith(ns + '::'));
+          keys.forEach(k => store.delete(k));
+          tx.oncomplete = res;
+          tx.onerror    = res;
+        };
+        req.onerror = res;
+      });
+      console.log('[limparCache] IDB limpo para namespace:', ns);
+    }
+  } catch (err) {
+    console.warn('[limparCache] erro ao limpar IDB:', err?.message);
+  }
+
+  // 4. SW Cache API: apagar entradas do namespace
+  try {
+    const ns = codigoAtual;
+    if (ns) {
+      const cache = await caches.open('mrit-player-cache-v13');
+      const keys  = await cache.keys();
+      await Promise.all(
+        keys.filter(r => r.url.includes(ns)).map(r => cache.delete(r))
+      );
+      console.log('[limparCache] SW cache limpo para namespace:', ns);
+    }
+  } catch (err) {
+    console.warn('[limparCache] erro ao limpar SW cache:', err?.message);
   }
 
   try { await stopNativeVideoPlayback(); } catch {}
@@ -5445,7 +5484,7 @@ setInterval(async () => {
   if (codigoAtual && navigator.onLine) {
     await enviarHeartbeatOnline();
   }
-}, 5 * 60 * 1000);
+}, 30 * 1000);
 
 window.addEventListener("beforeunload", () => {
   if (!codigoAtual) return;
