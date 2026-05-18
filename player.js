@@ -7072,22 +7072,7 @@ function initRtDebugOverlay() {
   _rtDbgEl.style.cssText =
     'position:fixed;top:8px;right:8px;background:rgba(0,0,0,0.85);color:#eee;' +
     'font-family:monospace;font-size:12px;line-height:1.7;padding:8px 12px;' +
-    'border-radius:6px;z-index:99999;display:none;min-width:200px;pointer-events:none;';
+    'border-radius:6px;z-index:99999;display:block;min-width:200px;pointer-events:none;';
   document.body.appendChild(_rtDbgEl);
   _rtDbgRender();
-
-  const hit = document.createElement('div');
-  hit.style.cssText = 'position:fixed;top:0;right:0;width:70px;height:70px;z-index:100000;';
-  hit.addEventListener('click', () => {
-    _rtDbgTaps++;
-    clearTimeout(_rtDbgTimer);
-    if (_rtDbgTaps >= 5) {
-      _rtDbgTaps = 0;
-      _rtDbgVisible = !_rtDbgVisible;
-      _rtDbgEl.style.display = _rtDbgVisible ? 'block' : 'none';
-    } else {
-      _rtDbgTimer = setTimeout(() => { _rtDbgTaps = 0; }, 2000);
-    }
-  });
-  document.body.appendChild(hit);
 }
