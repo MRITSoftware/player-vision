@@ -7239,6 +7239,20 @@ async function _cacheDbgRefresh() {
     swCountNs = keys.filter(r => r.url.includes(codigo)).length;
   } catch {}
 
+  // OTA: versão instalada e última disponível no banco
+  const otaInstalada = localStorage.getItem('mrit_ota_version') || PLAYER_VERSION;
+  let otaDisponivel = '—';
+  try {
+    const { data: ov } = await client.from('app_versions')
+      .select('version')
+      .is('target_codigo', null)
+      .is('target_device_id', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (ov) otaDisponivel = ov.version;
+  } catch {}
+
   const hora = new Date().toLocaleTimeString('pt-BR');
 
   _rtDbgEl.innerHTML =
@@ -7249,6 +7263,9 @@ async function _cacheDbgRefresh() {
     '<div>localStorage: ' + lsStatus + '</div>' +
     '<div>IDB vídeos: '   + idbCount + ' entradas</div>' +
     '<div>SW imagens: '   + swCount  + ' total (' + swCountNs + ' deste display)</div>' +
+    '<hr style="margin:3px 0;border-color:#444">' +
+    '<div>OTA instalada: ' + otaInstalada + '</div>' +
+    '<div>OTA disponível: ' + otaDisponivel + '</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
     '<div style="margin-top:2px;font-size:10px;opacity:0.6">atualizado: ' + hora + '</div>';
 }
