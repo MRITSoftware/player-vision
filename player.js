@@ -47,6 +47,8 @@ let deviceCommandsChannel = null;
 let promoChannel = null;
 let pollTimer = null;
 let cacheCheckTimer = null;
+const _rtDbg = { displays: '⏳', playlist: '—', dispositivos: '⏳', cmds: '⏳', promo: '⏳', poll: '—', evt: '—' };
+let _rtDbgEl = null, _rtDbgTaps = 0, _rtDbgTimer = null, _rtDbgVisible = false;
 let playToken = 0;
 let currentItemUrl = null;
 let isPlaying = false;
@@ -7035,8 +7037,6 @@ async function tocarFeedItem(item, token) {
 
 // ===== Debug Overlay — status do Realtime =====
 // Ativar: toque 5x no canto superior direito da tela
-const _rtDbg = { displays: '⏳', playlist: '—', dispositivos: '⏳', cmds: '⏳', promo: '⏳', poll: '—', evt: '—' };
-let _rtDbgEl = null, _rtDbgTaps = 0, _rtDbgTimer = null, _rtDbgVisible = false;
 
 function rtDbgUpdate(channel, status, evtLabel) {
   const icon = status === 'SUBSCRIBED' ? '🟢' :
