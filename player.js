@@ -51,6 +51,7 @@ const _rtDbg = { displays: '⏳', playlist: '—', dispositivos: '⏳', cmds: '�
 let _rtDbgEl = null, _rtDbgTaps = 0, _rtDbgTimer = null, _rtDbgVisible = false;
 let _dbgOverlayEnabled = false;
 let _dbgLastPoll = null;
+const _pageStartTime = Date.now();
 let playToken = 0;
 let currentItemUrl = null;
 let isPlaying = false;
@@ -7215,8 +7216,12 @@ async function tocarFeedItem(item, token) {
 
 // ===== Debug Overlay — status do Cache =====
 
-function rtDbgUpdate() {}   // mantido para não quebrar chamadas existentes
-function rtDbgPollTick() {}
+function rtDbgUpdate(channel, status) {
+  if (channel && status !== undefined) _rtDbg[channel] = status;
+}
+function rtDbgPollTick() {
+  _rtDbg.poll = new Date().toLocaleTimeString('pt-BR');
+}
 
 async function _cacheDbgRefresh() {
   if (!_rtDbgEl) return;
@@ -7287,28 +7292,64 @@ async function _cacheDbgRefresh() {
     }
   } catch {}
 
+  // Realtime: status dos canais principais
+  function rtColor(s) {
+    if (!s || s === '—' || s === '⏳') return s || '⏳';
+    if (s === 'SUBSCRIBED')    return '✅ ' + s;
+    if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') return '❌ ' + s;
+    if (s === 'CLOSED')        return '🔸 ' + s;
+    return '⏳ ' + s;
+  }
+
+  // Playlist: posição atual / total
+  let playlistPos = '—';
+  try {
+    if (typeof playlist !== 'undefined' && playlist.length > 0) {
+      const idx = (typeof currentIndex !== 'undefined' ? currentIndex : 0);
+      playlistPos = (idx + 1) + ' / ' + playlist.length;
+    }
+  } catch {}
+
+  // SW: registro ativo?
+  const swStatus = navigator.serviceWorker?.controller ? '✅ ativo' : '⚠️ inativo';
+
+  // Uptime
+  const uptimeSec = Math.floor((Date.now() - _pageStartTime) / 1000);
+  const uptimeStr = uptimeSec < 60
+    ? uptimeSec + 's'
+    : Math.floor(uptimeSec / 60) + 'm ' + (uptimeSec % 60) + 's';
+
   const online   = navigator.onLine ? '✅ online' : '❌ offline';
   const lastPoll = _dbgLastPoll ? _dbgLastPoll.toLocaleTimeString('pt-BR') : '—';
   const conteudo = currentContentCode || '—';
   const hora     = new Date().toLocaleTimeString('pt-BR');
 
   _rtDbgEl.innerHTML =
-    '<b style="display:block;margin-bottom:4px;font-size:11px">MRIT DEBUG</b>' +
-    '<div>display: '   + codigo   + '</div>' +
-    '<div>conteúdo: '  + conteudo + '</div>' +
-    '<div>device: '    + device   + '</div>' +
-    '<div>rede: '      + online   + '</div>' +
-    '<div>último poll: ' + lastPoll + '</div>' +
+    '<b style="display:block;margin-bottom:4px;font-size:11px">MRIT DEBUG v' + PLAYER_VERSION + '</b>' +
+    '<div>display: '    + codigo    + '</div>' +
+    '<div>conteúdo: '   + conteudo  + '</div>' +
+    '<div>device: '     + device    + '</div>' +
+    '<div>rede: '       + online    + ' | SW: ' + swStatus + '</div>' +
+    '<div>poll: '       + lastPoll  + ' | up: ' + uptimeStr + '</div>' +
+    '<div>playlist: '   + playlistPos + '</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
-    '<div>LS playlist: ' + lsStatus + '</div>' +
-    '<div>IDB vídeos: '  + idbCount + ' entradas</div>' +
-    '<div>SW imagens: '  + swCount  + ' total (' + swCountNs + ' deste display)</div>' +
+    '<b style="font-size:10px;opacity:0.7">REALTIME</b>' +
+    '<div>displays: '    + rtColor(_rtDbg.displays)    + '</div>' +
+    '<div>cmds: '        + rtColor(_rtDbg.cmds)        + '</div>' +
+    '<div>playlist: '    + rtColor(_rtDbg.playlist)    + '</div>' +
+    '<div>dispositivos: '+ rtColor(_rtDbg.dispositivos)+ '</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
-    '<div>OTA instalada: '  + otaInstalada  + '</div>' +
-    '<div>OTA disponível: ' + otaDisponivel + '</div>' +
-    '<div>cmds pendentes: ' + cmdsPendentes + '</div>' +
+    '<b style="font-size:10px;opacity:0.7">CACHE</b>' +
+    '<div>LS: '         + lsStatus + '</div>' +
+    '<div>IDB vídeos: ' + idbCount + ' entradas</div>' +
+    '<div>SW imagens: ' + swCount  + ' total (' + swCountNs + ' deste display)</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
-    '<div style="margin-top:2px;font-size:10px;opacity:0.6">atualizado: ' + hora + '</div>';
+    '<b style="font-size:10px;opacity:0.7">OTA</b>' +
+    '<div>instalada: '  + otaInstalada  + '</div>' +
+    '<div>disponível: ' + otaDisponivel + '</div>' +
+    '<div>cmds pend.: ' + cmdsPendentes + '</div>' +
+    '<hr style="margin:3px 0;border-color:#444">' +
+    '<div style="font-size:10px;opacity:0.6">atualizado: ' + hora + '</div>';
 }
 
 function initRtDebugOverlay() {
