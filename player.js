@@ -3320,6 +3320,58 @@ async function limparCacheAtualEReload() {
   }
 }
 
+// Limpa cache apenas de um conteúdo específico (por código), sem recarregar tudo
+async function limparCacheConteudo(contentCode) {
+  if (!contentCode) return;
+
+  // 1. Obter URLs do conteúdo a partir do localStorage
+  let urls = [];
+  try {
+    const raw = localStorage.getItem(cacheKeyFor(contentCode));
+    if (raw) {
+      const data = JSON.parse(raw);
+      urls = (data?.playlist || []).map(item => item.url).filter(Boolean);
+    }
+  } catch {}
+
+  // 2. Remover entrada localStorage deste conteúdo
+  try { localStorage.removeItem(cacheKeyFor(contentCode)); } catch {}
+
+  // 3. Remover entradas IDB para as URLs deste conteúdo
+  if (urls.length > 0 && codigoAtual) {
+    try {
+      const db = await idbOpen();
+      await new Promise((res) => {
+        const tx = db.transaction('videos', 'readwrite');
+        const store = tx.objectStore('videos');
+        urls.forEach(url => store.delete(`${codigoAtual}::${url}`));
+        tx.oncomplete = res;
+        tx.onerror = res;
+      });
+      console.log('[limparCache] IDB: removidas', urls.length, 'URLs do conteúdo', contentCode);
+    } catch (err) {
+      console.warn('[limparCache] erro IDB:', err?.message);
+    }
+  }
+
+  // 4. Remover entradas SW cache para as URLs deste conteúdo
+  if (urls.length > 0) {
+    try {
+      const cache = await caches.open('mrit-player-cache-v13');
+      await Promise.all(urls.map(url => cache.delete(url)));
+      console.log('[limparCache] SW cache: removidas URLs do conteúdo', contentCode);
+    } catch (err) {
+      console.warn('[limparCache] erro SW cache:', err?.message);
+    }
+  }
+
+  // 5. Se for o conteúdo exibido agora, recarregar para baixar novamente
+  if (contentCode === currentContentCode) {
+    console.log('[limparCache] recarregando conteúdo atual após limpeza seletiva');
+    await carregarConteudo(contentCode);
+  }
+}
+
 // Reset agressivo quando entra com um novo cÃ³digo
 async function resetAllCachesForNewCode() {
   // limpa caches antigos de playlists (todas as telas)
@@ -5134,7 +5186,7 @@ async function verificarComandosDispositivo() {
     // Buscar comandos pendentes para este dispositivo
     const { data: comandos, error } = await client
       .from("device_commands")
-      .select("id, command, executed")
+      .select("id, command, executed, payload")
       .eq("device_id", deviceId)
       .eq("executed", false)
       .order("created_at", { ascending: true })
@@ -5206,6 +5258,15 @@ async function verificarComandosDispositivo() {
           console.log("🧹 Limpando cache remotamente e recarregando conteúdo...");
           await limparCacheAtualEReload();
           return;
+        } else if (commandName === 'clear_content') {
+          await marcarComandoExecutado();
+          const contentCode = comando.payload?.content_code;
+          if (contentCode) {
+            console.log('[limparCache] comando clear_content para:', contentCode);
+            await limparCacheConteudo(contentCode);
+          } else {
+            console.warn('[limparCache] clear_content sem content_code no payload');
+          }
         } else if (commandName === 'update_app') {
           await marcarComandoExecutado();
           console.log('[OTA] comando update_app recebido');
