@@ -544,13 +544,33 @@ function startPlaybackWatchdog(videoEl, token, itemUrl) {
   stopPlaybackWatchdog();
   let lastTime = -1;
   let lastProgressAt = Date.now();
+  let lastPausedAt = null;
 
   playbackWatchdogTimer = setInterval(() => {
     if (token !== playToken) {
       stopPlaybackWatchdog();
       return;
     }
-    if (!videoEl || videoEl.style.display === "none" || videoEl.paused) return;
+    if (!videoEl || videoEl.style.display === "none") return;
+
+    if (videoEl.paused) {
+      if (!lastPausedAt) lastPausedAt = Date.now();
+      const pausedFor = Date.now() - lastPausedAt;
+      if (pausedFor >= 4000) {
+        console.warn("[watchdog] video pausado por " + (pausedFor / 1000).toFixed(1) + "s, tentando retomar...");
+        lastPausedAt = Date.now();
+        videoEl.play()
+          .then(() => { lastPausedAt = null; lastProgressAt = Date.now(); })
+          .catch(() => {
+            console.warn("[watchdog] nao conseguiu retomar, pulando item");
+            stopPlaybackWatchdog();
+            isPlaying = false;
+            proximoItem();
+          });
+      }
+      return;
+    }
+    lastPausedAt = null;
 
     const t = Number(videoEl.currentTime || 0);
     if (t > lastTime + 0.05) {
@@ -3207,7 +3227,7 @@ async function tocarLoop() {
     await stopNativeVideoPlayback();
   }
   stopPlaybackWatchdog();
-  for (const v of getUniqueVideoEls()) v.onended = null;
+  for (const v of getUniqueVideoEls()) { v.onended = null; v.onerror = null; }
   img.onload = null;
   img.onerror = null;
   restoreMediaLayerStyles();
@@ -3499,6 +3519,25 @@ async function tocarLoop() {
         proximoItem();
         verificarMudancasPosTrocaEmBackground();
       };
+
+      nextVideo.onerror = () => {
+        if (myToken !== playToken) return;
+        console.warn("[playback] video error event, pulando item:", itemUrl);
+        stopPlaybackWatchdog();
+        isPlaying = false;
+        registerItemFailure(itemUrl, "video_error_event");
+        proximoItem();
+      };
+
+      nextVideo.addEventListener('pause', function onUnexpectedPause() {
+        if (myToken !== playToken) { nextVideo.removeEventListener('pause', onUnexpectedPause); return; }
+        if (!isPlaying || nextVideo.ended) return;
+        setTimeout(() => {
+          if (myToken !== playToken || !nextVideo.paused || !isPlaying || nextVideo.ended) return;
+          nextVideo.play().catch(() => {});
+        }, 500);
+      });
+
     } catch (e) {
       isLoadingVideo = false;
       stopPlaybackWatchdog();
