@@ -49,6 +49,8 @@ let pollTimer = null;
 let cacheCheckTimer = null;
 const _rtDbg = { displays: '⏳', playlist: '—', dispositivos: '⏳', cmds: '⏳', promo: '⏳', poll: '—', evt: '—' };
 let _rtDbgEl = null, _rtDbgTaps = 0, _rtDbgTimer = null, _rtDbgVisible = false;
+let _dbgOverlayEnabled = false;
+let _dbgLastPoll = null;
 let playToken = 0;
 let currentItemUrl = null;
 let isPlaying = false;
@@ -5134,7 +5136,7 @@ async function checarLockEConteudo() {
     // Buscar com device_id para verificar se Ã© o mesmo dispositivo
     let { data, error } = await client
       .from("displays")
-      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache,limpar_conteudo,limpar_midia_url")
+      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache,limpar_conteudo,limpar_midia_url,debug_overlay")
       .eq("codigo_unico", codigoAtual)
       .maybeSingle();
 
@@ -5149,6 +5151,13 @@ async function checarLockEConteudo() {
     }
 
     if (!data) return;
+
+    // debug_overlay: mostrar/esconder overlay de diagnóstico por dispositivo
+    _dbgLastPoll = new Date();
+    if (data.debug_overlay !== undefined) {
+      _dbgOverlayEnabled = data.debug_overlay === true;
+      if (_rtDbgEl) _rtDbgEl.style.display = _dbgOverlayEnabled ? 'block' : 'none';
+    }
 
     // limpar_cache = true => painel/SQL solicitou limpeza total
     if (data.limpar_cache === true) {
@@ -7266,19 +7275,38 @@ async function _cacheDbgRefresh() {
     if (ov) otaDisponivel = ov.version;
   } catch {}
 
-  const hora = new Date().toLocaleTimeString('pt-BR');
+  // Comandos pendentes
+  let cmdsPendentes = '—';
+  try {
+    const dId = localStorage.getItem('mrit_device_id');
+    if (dId) {
+      const { count } = await client.from('device_commands')
+        .select('*', { count: 'exact', head: true })
+        .eq('device_id', dId).eq('executed', false);
+      cmdsPendentes = count !== null ? String(count) : '0';
+    }
+  } catch {}
+
+  const online   = navigator.onLine ? '✅ online' : '❌ offline';
+  const lastPoll = _dbgLastPoll ? _dbgLastPoll.toLocaleTimeString('pt-BR') : '—';
+  const conteudo = currentContentCode || '—';
+  const hora     = new Date().toLocaleTimeString('pt-BR');
 
   _rtDbgEl.innerHTML =
-    '<b style="display:block;margin-bottom:4px;font-size:11px">CACHE DEBUG</b>' +
-    '<div>código: '  + codigo   + '</div>' +
-    '<div>device: '  + device.slice(-8) + '</div>' +
+    '<b style="display:block;margin-bottom:4px;font-size:11px">MRIT DEBUG</b>' +
+    '<div>display: '   + codigo   + '</div>' +
+    '<div>conteúdo: '  + conteudo + '</div>' +
+    '<div>device: '    + device   + '</div>' +
+    '<div>rede: '      + online   + '</div>' +
+    '<div>último poll: ' + lastPoll + '</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
-    '<div>localStorage: ' + lsStatus + '</div>' +
-    '<div>IDB vídeos: '   + idbCount + ' entradas</div>' +
-    '<div>SW imagens: '   + swCount  + ' total (' + swCountNs + ' deste display)</div>' +
+    '<div>LS playlist: ' + lsStatus + '</div>' +
+    '<div>IDB vídeos: '  + idbCount + ' entradas</div>' +
+    '<div>SW imagens: '  + swCount  + ' total (' + swCountNs + ' deste display)</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
-    '<div>OTA instalada: ' + otaInstalada + '</div>' +
+    '<div>OTA instalada: '  + otaInstalada  + '</div>' +
     '<div>OTA disponível: ' + otaDisponivel + '</div>' +
+    '<div>cmds pendentes: ' + cmdsPendentes + '</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
     '<div style="margin-top:2px;font-size:10px;opacity:0.6">atualizado: ' + hora + '</div>';
 }
@@ -7288,7 +7316,7 @@ function initRtDebugOverlay() {
   _rtDbgEl.style.cssText =
     'position:fixed;top:8px;right:8px;background:rgba(0,0,0,0.85);color:#eee;' +
     'font-family:monospace;font-size:12px;line-height:1.7;padding:8px 12px;' +
-    'border-radius:6px;z-index:99999;display:block;min-width:190px;pointer-events:none;';
+    'border-radius:6px;z-index:99999;display:none;min-width:220px;pointer-events:none;';
   document.body.appendChild(_rtDbgEl);
   _cacheDbgRefresh();
   setInterval(_cacheDbgRefresh, 3000);
