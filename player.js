@@ -7035,36 +7035,64 @@ async function tocarFeedItem(item, token) {
   }
 }
 
-// ===== Debug Overlay — status do Realtime =====
-// Ativar: toque 5x no canto superior direito da tela
+// ===== Debug Overlay — status do Cache =====
 
-function rtDbgUpdate(channel, status, evtLabel) {
-  const icon = status === 'SUBSCRIBED' ? '🟢' :
-               (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') ? '🔴' :
-               status === 'CLOSED' ? '⚫' : '🟡';
-  _rtDbg[channel] = icon + ' ' + status;
-  if (evtLabel) _rtDbg.evt = evtLabel + ' ' + new Date().toLocaleTimeString('pt-BR');
-  _rtDbgRender();
-}
+function rtDbgUpdate() {}   // mantido para não quebrar chamadas existentes
+function rtDbgPollTick() {}
 
-function rtDbgPollTick() {
-  _rtDbg.poll = new Date().toLocaleTimeString('pt-BR');
-  _rtDbgRender();
-}
-
-function _rtDbgRender() {
+async function _cacheDbgRefresh() {
   if (!_rtDbgEl) return;
+
+  const codigo  = codigoAtual || localStorage.getItem('mrit_display_codigo') || '—';
+  const device  = localStorage.getItem('mrit_device_id') || '—';
+
+  // localStorage: playlist cache
+  let lsStatus = '❌ vazio';
+  let lsItens  = 0;
+  try {
+    const raw = localStorage.getItem('playlist_cache_' + codigo);
+    if (raw) {
+      const data = JSON.parse(raw);
+      lsItens  = Array.isArray(data?.playlist) ? data.playlist.length : 0;
+      lsStatus = lsItens > 0 ? '✅ ' + lsItens + ' itens' : '❌ vazio';
+    }
+  } catch {}
+
+  // IDB: contar entradas do namespace atual
+  let idbCount = 0;
+  try {
+    const db = await idbOpen();
+    idbCount = await new Promise((res) => {
+      const tx  = db.transaction('videos', 'readonly');
+      const req = tx.objectStore('videos').getAllKeys();
+      req.onsuccess = () => {
+        const keys = req.result || [];
+        res(keys.filter(k => k.startsWith(codigo + '::')).length);
+      };
+      req.onerror = () => res(0);
+    });
+  } catch {}
+
+  // SW cache: contar entradas do namespace
+  let swCount = 0;
+  try {
+    const cache = await caches.open('mrit-player-cache-v13');
+    const keys  = await cache.keys();
+    swCount = keys.filter(r => r.url.includes(codigo)).length;
+  } catch {}
+
+  const hora = new Date().toLocaleTimeString('pt-BR');
+
   _rtDbgEl.innerHTML =
-    '<b style="display:block;margin-bottom:3px;font-size:11px">REALTIME DEBUG</b>' +
-    '<div>displays: '     + _rtDbg.displays     + '</div>' +
-    '<div>playlist: '     + _rtDbg.playlist     + '</div>' +
-    '<div>dispositivos: ' + _rtDbg.dispositivos + '</div>' +
-    '<div>cmds: '         + _rtDbg.cmds         + '</div>' +
-    '<div>promo: '        + _rtDbg.promo        + '</div>' +
+    '<b style="display:block;margin-bottom:4px;font-size:11px">CACHE DEBUG</b>' +
+    '<div>código: '  + codigo   + '</div>' +
+    '<div>device: '  + device.slice(-8) + '</div>' +
     '<hr style="margin:3px 0;border-color:#444">' +
-    '<div>poll: '         + _rtDbg.poll         + '</div>' +
-    '<div>evt: '          + _rtDbg.evt          + '</div>' +
-    '<div style="margin-top:4px;font-size:9px;opacity:0.5">5x canto sup-dir p/ fechar</div>';
+    '<div>localStorage: ' + lsStatus + '</div>' +
+    '<div>IDB vídeos: '   + idbCount + ' entradas</div>' +
+    '<div>SW imagens: '   + swCount  + ' entradas</div>' +
+    '<hr style="margin:3px 0;border-color:#444">' +
+    '<div style="margin-top:2px;font-size:10px;opacity:0.6">atualizado: ' + hora + '</div>';
 }
 
 function initRtDebugOverlay() {
@@ -7072,7 +7100,8 @@ function initRtDebugOverlay() {
   _rtDbgEl.style.cssText =
     'position:fixed;top:8px;right:8px;background:rgba(0,0,0,0.85);color:#eee;' +
     'font-family:monospace;font-size:12px;line-height:1.7;padding:8px 12px;' +
-    'border-radius:6px;z-index:99999;display:block;min-width:200px;pointer-events:none;';
+    'border-radius:6px;z-index:99999;display:block;min-width:190px;pointer-events:none;';
   document.body.appendChild(_rtDbgEl);
-  _rtDbgRender();
+  _cacheDbgRefresh();
+  setInterval(_cacheDbgRefresh, 3000);
 }
