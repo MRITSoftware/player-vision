@@ -784,17 +784,54 @@ async function checkOTAUpdate() {
 }
 
 async function applyOTAUpdate(url, version) {
+  // Tela de atualização em andamento
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#000;' +
+    'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;';
+  overlay.innerHTML =
+    '<div style="color:#fff;font-size:26px;font-weight:600;letter-spacing:2px;font-family:sans-serif">MRIT Vision</div>' +
+    '<div id="_ota_msg" style="color:#aaa;font-size:15px;font-family:sans-serif;letter-spacing:1px">Baixando atualização<span id="_ota_dots"></span></div>' +
+    '<div style="width:180px;height:3px;background:#222;border-radius:2px;overflow:hidden">' +
+      '<div id="_ota_bar" style="height:100%;width:0%;background:#f5a623;transition:width 0.4s ease;border-radius:2px"></div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  // Animação dos pontinhos
+  let dotCount = 0;
+  const dotTimer = setInterval(() => {
+    const el = document.getElementById('_ota_dots');
+    if (el) el.textContent = '.'.repeat(++dotCount % 4);
+  }, 400);
+
+  const setProgress = (pct) => {
+    const bar = document.getElementById('_ota_bar');
+    if (bar) bar.style.width = pct + '%';
+  };
+  const setMsg = (msg) => {
+    const el = document.getElementById('_ota_msg');
+    if (el) { el.innerHTML = msg; }
+  };
+
   try {
     console.log('[OTA] baixando...');
+    setProgress(10);
     const resp = await fetch(url, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    setProgress(50);
     const text = await resp.text();
+    setProgress(80);
+    setMsg('Instalando atualização');
     await otaIdbSave(text);
     localStorage.setItem(OTA_VERSION_KEY, version);
+    setProgress(100);
+    clearInterval(dotTimer);
+    setMsg('Reiniciando...');
     console.log(`[OTA] versao ${version} salva. Recarregando...`);
-    setTimeout(() => window.location.reload(), 1500);
+    setTimeout(() => window.location.reload(), 1200);
   } catch (e) {
+    clearInterval(dotTimer);
     console.error('[OTA] falha:', e);
+    try { document.body.removeChild(overlay); } catch {}
   }
 }
 
@@ -939,10 +976,11 @@ function mostrarBannerAtualizacao() {
   ].join(';');
 
   const txt = document.createElement('span');
-  txt.textContent = 'App atualizado';
+  txt.textContent = '✓ MRIT Vision atualizado';
   txt.style.cssText = [
-    'color:#fff', 'font-size:22px', 'font-weight:600',
-    'letter-spacing:2px', 'text-shadow:0 2px 8px rgba(0,0,0,0.7)',
+    'color:#fff', 'font-size:20px', 'font-weight:600',
+    'letter-spacing:2px', 'text-shadow:0 2px 12px rgba(0,0,0,0.9)',
+    'background:rgba(0,0,0,0.55)', 'padding:10px 22px', 'border-radius:8px',
   ].join(';');
 
   banner.appendChild(txt);
@@ -951,7 +989,7 @@ function mostrarBannerAtualizacao() {
   setTimeout(() => {
     banner.style.opacity = '0';
     setTimeout(() => { try { document.body.removeChild(banner); } catch {} }, 1000);
-  }, 15000);
+  }, 3500);
 }
 
 // Reconecta canais realtime e retoma vídeo quando app volta do background (crítico no Android)
