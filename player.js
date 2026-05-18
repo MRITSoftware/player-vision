@@ -3320,6 +3320,37 @@ async function limparCacheAtualEReload() {
   }
 }
 
+// Limpa cache de uma mídia específica (por URL), sem recarregar tudo
+async function limparCacheMidia(url) {
+  if (!url) return;
+  console.log('[limparCache] removendo mídia específica:', url);
+
+  // IDB: chave é ${displayCodigo}::${url}
+  if (codigoAtual) {
+    try {
+      const db = await idbOpen();
+      await new Promise((res) => {
+        const tx = db.transaction('videos', 'readwrite');
+        tx.objectStore('videos').delete(`${codigoAtual}::${url}`);
+        tx.oncomplete = res;
+        tx.onerror = res;
+      });
+    } catch (err) {
+      console.warn('[limparCache] erro IDB mídia:', err?.message);
+    }
+  }
+
+  // SW Cache API
+  try {
+    const cache = await caches.open('mrit-player-cache-v13');
+    await cache.delete(url);
+  } catch (err) {
+    console.warn('[limparCache] erro SW mídia:', err?.message);
+  }
+
+  console.log('[limparCache] mídia removida do cache:', url);
+}
+
 // Limpa cache apenas de um conteúdo específico (por código), sem recarregar tudo
 async function limparCacheConteudo(contentCode) {
   if (!contentCode) return;
@@ -5103,7 +5134,7 @@ async function checarLockEConteudo() {
     // Buscar com device_id para verificar se Ã© o mesmo dispositivo
     let { data, error } = await client
       .from("displays")
-      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache,limpar_conteudo")
+      .select("is_locked,codigo_conteudoAtual,device_id,orientacao,limpar_cache,limpar_conteudo,limpar_midia_url")
       .eq("codigo_unico", codigoAtual)
       .maybeSingle();
 
@@ -5134,6 +5165,14 @@ async function checarLockEConteudo() {
       try { await client.from('displays').update({ limpar_conteudo: null }).eq('codigo_unico', codigoAtual); } catch {}
       await limparCacheConteudo(alvo);
       return;
+    }
+
+    // limpar_midia_url = 'https://...' => limpar só um arquivo específico do cache
+    if (data.limpar_midia_url) {
+      const url = data.limpar_midia_url;
+      console.log('[poll] limpar_midia_url detectado:', url);
+      try { await client.from('displays').update({ limpar_midia_url: null }).eq('codigo_unico', codigoAtual); } catch {}
+      await limparCacheMidia(url);
     }
 
     // Verificar se Ã© o mesmo dispositivo
