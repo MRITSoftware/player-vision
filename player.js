@@ -10,17 +10,11 @@
 
 const supabaseUrl = "https://base.muraltv.com.br";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUyODA3NjAwLCJleHAiOjE5MTA1NzQwMDB9.P4goMdCvXKPk9ViLYlSUk7nR_zeW3yUw5ixjv7Mk99g";
-const client = supabase.createClient(supabaseUrl, supabaseKey, {
-  realtime: {
-    transport: XMLHttpRequest,
-    timeout: 60000,
-    heartbeatIntervalMs: 30000,
-  }
-});
+const client = supabase.createClient(supabaseUrl, supabaseKey);
 
 // ===== Constantes/estado =====
 const PLAYER_VERSION = '2.0';
-const POLLING_MS = 15000; // polling de segurança a cada 15s (complementa o realtime)
+const POLLING_MS = 3000; // polling principal a cada 3s (realtime indisponível na infra atual)
 
 // ===== ConfiguraÃ§Ãµes de Buffering =====
 // Modos disponÃ­veis:
